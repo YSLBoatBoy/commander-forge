@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>commander-forge</Name>
+  <Repository>ghcr.io/yslboatboy/commander-forge:latest</Repository>
+  <Registry>https://github.com/YSLBoatBoy/commander-forge/pkgs/container/commander-forge</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/YSLBoatBoy/commander-forge/issues</Support>
+  <Project>https://github.com/YSLBoatBoy/commander-forge</Project>
+  <Overview>Commander Forge: a Magic: The Gathering Commander deckbuilder. Pick a commander, gameplan, bracket and budget, get synergy-ranked cards with write-ups using live Scryfall, EDHREC and Commander Spellbook data, keep your card collection, playtest, and export to Archidekt or Moxfield. AI recommendations use Google Gemini (free tier works) or an Anthropic API key, which you can set here or in the app.</Overview>
+  <Category>Tools: Other:</Category>
+  <WebUI>http://[IP]:[PORT:8790]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/YSLBoatBoy/commander-forge/main/unraid/commander-forge.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/YSLBoatBoy/commander-forge/main/unraid/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI port" Target="8790" Default="8790" Mode="tcp" Description="Port for the web page." Type="Port" Display="always" Required="true" Mask="false">8790</Config>
+  <Config Name="App data" Target="/data" Default="/mnt/user/appdata/commander-forge" Mode="rw" Description="Your collection, saved builds, settings and the card-data cache (one SQLite file)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/commander-forge</Config>
+  <Config Name="Gemini API key" Target="GEMINI_API_KEY" Default="" Mode="" Description="Optional. You can also paste it in the app under AI engine. Free key: aistudio.google.com/apikey" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Anthropic API key" Target="ANTHROPIC_API_KEY" Default="" Mode="" Description="Optional. Use Claude instead of Gemini. Key: console.anthropic.com" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="AI provider" Target="AI_PROVIDER" Default="" Mode="" Description="Optional: gemini or anthropic. Leave blank to choose in the app." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Password" Target="APP_PASSWORD" Default="" Mode="" Description="Optional. If set, the app asks for this password (any username) before opening." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+</Container>

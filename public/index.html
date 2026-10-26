@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Commander Forge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700;800&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='7' y='3' width='18' height='26' rx='3' fill='%23B4501C'/%3E%3Crect x='10' y='6' width='12' height='9' rx='1' fill='%23F5E1D4'/%3E%3C/svg%3E">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <h1>Commander Forge</h1>
+  <p>Build a new Commander deck or upgrade one you already have, using live Scryfall prices and EDHREC play data, then export to Archidekt or Moxfield.</p>
+  <span class="live" id="liveChip"><i></i><span>Checking live data…</span></span>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button type="button" role="tab" id="tabBuilder" data-view="builder" aria-selected="true">Deck builder</button>
+  <button type="button" role="tab" id="tabColl" data-view="collection" aria-selected="false">My collection<span class="cnt" id="collCount"></span></button>
+</nav>
+
+<div class="wrap" id="builderView">
+<main>
+  <div id="exampleBanner" class="banner" hidden>You're looking at an example build for <b>Yennett, Cryptic Sovereign</b> with estimated prices. Start a new deck or import yours below.</div>
+  <div id="noClaude" class="err" hidden>Card recommendations need Claude, which isn't available in this view. Open this page in Claude while signed in, and allow it to use Claude when asked.</div>
+  <div id="liveNote" class="warnbox" hidden>Live prices and EDHREC data come through the browser in the Claude desktop app. In this view, prices are Claude's estimates. Open this page in the desktop app for live data.</div>
+
+  <section class="step" aria-labelledby="h0">
+    <div class="step-h"><span class="num">0</span><h2 id="h0">What are we doing?</h2></div>
+    <div class="modes" role="group" aria-label="Mode">
+      <button type="button" class="mode" data-mode="new"><b>New deck</b><span>Start from a commander and build 99 cards around it.</span></button>
+      <button type="button" class="mode" data-mode="import"><b>Import a deck</b><span>Paste a Moxfield or Archidekt list and get upgrade suggestions.</span></button>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="hImp" id="importSec">
+    <div class="step-h"><span class="num">1</span><h2 id="hImp">Paste your decklist</h2><span class="hint">Moxfield or Archidekt export, one card per line, like "1 Sol Ring (C21) 263" or "1x Sol Ring [Ramp]".</span></div>
+    <textarea id="importText" spellcheck="false" placeholder="1x Yennett, Cryptic Sovereign [Commander{top}]&#10;1x Sol Ring [Ramp]&#10;1 Arcane Signet (CMR) 297&#10;8 Island"></textarea>
+    <div class="row">
+      <button class="btn primary" id="importBtn" type="button">Import deck</button>
+      <span id="importStatus" class="progress"></span>
+    </div>
+    <div class="precon">
+      <span class="eyebrow">Or start from an official precon (MTGJSON)</span>
+      <div class="row"><input id="preconFilter" type="text" class="grow" placeholder="Filter by deck, commander or set" aria-label="Filter precons"></div>
+      <div class="row"><select id="preconSel" class="grow" aria-label="Official precon decks"></select><button class="btn small" id="preconLoad" type="button">Load precon</button></div>
+    </div>
+    <div id="importCmdr"></div>
+    <div class="row" id="importOwnRow" hidden><button class="btn small" id="importOwnBtn" type="button">Add this whole deck to my collection</button><span class="note">For decks you already have built.</span></div>
+  </section>
+
+  <section class="step" aria-labelledby="h1" id="cmdSec">
+    <div class="step-h"><span class="num">1</span><h2 id="h1">Commander</h2><span class="hint">One commander, or a partner / background pair like "Tymna + Thrasios".</span></div>
+    <form id="cmdForm" class="row">
+      <div class="ac">
+        <input id="cmdInput" type="text" placeholder="Start typing a commander, e.g. yen" autocomplete="off" spellcheck="false" aria-label="Commander name" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="acList">
+        <ul id="acList" class="ac-list" role="listbox" aria-label="Matching commanders" hidden></ul>
+      </div>
+      <button class="btn primary" id="analyzeBtn" type="submit">Analyze commander</button>
+    </form>
+    <div id="cmdStatus"></div>
+    <div id="cmdView"></div>
+  </section>
+
+  <section class="step" aria-labelledby="h2">
+    <div class="step-h"><span class="num">2</span><h2 id="h2">Gameplan</h2><span class="hint" id="planHint">Pick one or two. Deck counts come from EDHREC.</span></div>
+    <div id="plans" class="plans"><div class="empty">Analyze a commander to see the ways people build it.</div></div>
+    <label class="f">Your own twist (optional)
+      <textarea id="custom" placeholder="e.g. lean into stealing opponents' creatures; I love big flashy spells"></textarea>
+    </label>
+  </section>
+
+  <section class="step" aria-labelledby="h3">
+    <div class="step-h"><span class="num">3</span><h2 id="h3">Bracket, budget and limits</h2></div>
+    <div class="brackets" id="brackets" role="group" aria-label="Commander bracket"></div>
+    <div class="rules" id="bracketRules"></div>
+    <div class="budget">
+      <span class="eyebrow" id="budgetLabel">Deck budget (excluding basics)</span>
+      <div class="row">
+        <div class="money"><span>$</span><input id="budget" type="number" min="0" step="25" inputmode="numeric" aria-label="Budget in dollars"></div>
+        <div class="presets" id="presets"></div>
+      </div>
+      <span class="note" id="budgetNote">Recommendations aim to land near this total. Every card also gets an upgrade and a budget alternative you can swap to in one click.</span>
+    </div>
+    <div class="two">
+      <label class="f">Must include (pet cards)<textarea id="must" placeholder="One per line"></textarea></label>
+      <label class="f">Avoid<textarea id="avoid" placeholder="e.g. no infinite combos, no stax, no counterspells"></textarea></label>
+    </div>
+    <label class="toggle" id="preferOwnedRow" hidden><input type="checkbox" id="preferOwned" checked> Prefer cards I already own (<span id="ownedHintCount">0</span> of my cards fit this commander)</label>
+    <div class="row">
+      <button class="btn primary" id="buildBtn" type="button">Build card pool</button>
+      <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
+      <span id="buildStatus" class="progress"></span>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="h4" id="poolSec">
+    <div class="step-h"><span class="num">4</span><h2 id="h4">Card pool</h2><span class="hint">Checked cards are in the deck. Click a name to see it on Scryfall.</span></div>
+    <div id="insight"></div>
+    <div class="filters">
+      <button class="btn small" id="autofillBtn" type="button">Auto-pick best 99</button>
+      <button class="btn small" id="fillOpenBtn" type="button">Fill open slots</button>
+      <button class="btn small" id="refreshBtn" type="button">Refresh live prices</button>
+      <label class="toggle"><input type="checkbox" id="showOff" checked> Show unpicked cards</label>
+      <input id="poolFilter" type="text" placeholder="Find a card" aria-label="Find a card in the pool" style="padding:5px 10px;width:170px">
+      <label class="toggle" id="ownedOnlyRow" hidden><input type="checkbox" id="ownedOnly"> Only cards I own</label>
+    </div>
+    <div id="pool"><div class="empty">Your recommendations will appear here, grouped by role.</div></div>
+  </section>
+
+  <section class="step" aria-labelledby="h5" id="refineSec">
+    <div class="step-h"><span class="num">5</span><h2 id="h5">Anything you'd like to see added?</h2><span class="hint">Ask for changes in plain words. You'll see the proposed adds and cuts before anything changes.</span></div>
+    <div class="examples" id="refineExamples">
+      <button type="button" id="splurgeChip">I have enough to add a couple of expensive cards. Give me some suggestions</button>
+      <button type="button">Add more ramp</button>
+      <button type="button">I want more ways to protect my commander</button>
+      <button type="button">Make the deck cheaper without losing much power</button>
+      <button type="button">Add a couple of win conditions</button>
+    </div>
+    <div class="refine">
+      <textarea id="refineText" placeholder="I'd like to add more ramp to this deck"></textarea>
+      <div class="row"><button class="btn primary" id="refineBtn" type="button">Suggest changes</button><span id="refineStatus" class="progress"></span></div>
+      <div id="refineOut"></div>
+    </div>
+  </section>
+
+  <section class="step" aria-labelledby="h6" id="comboSec">
+    <div class="step-h"><span class="num">6</span><h2 id="h6">Combos</h2><span class="hint">From Commander Spellbook: combos already in your deck, and ones you're one card away from.</span></div>
+    <div class="row"><button class="btn primary" id="comboBtn" type="button">Find combos</button><span id="comboStatus" class="progress"></span></div>
+    <div id="comboOut"></div>
+  </section>
+
+  <section class="step" aria-labelledby="h7" id="testSec">
+    <div class="step-h"><span class="num">7</span><h2 id="h7">Playtest</h2><span class="hint">Plays the first six turns of many games, then tells you what to change.</span></div>
+    <div class="row">
+      <button class="btn primary" id="ptRun" type="button">Run playtest</button>
+      <label class="toggle">Games <select id="ptN" aria-label="Number of games"><option value="100">100</option><option value="1000" selected>1,000</option><option value="5000">5,000</option></select></label>
+      <span class="note" id="ptNote"></span>
+    </div>
+    <div id="ptOut" style="display:grid;gap:14px"></div>
+    <div class="odds" id="odds" hidden></div>
+    <span class="eyebrow" style="margin-top:6px">Draw a hand yourself</span>
+    <div class="row">
+      <button class="btn primary small" id="draw7" type="button">Draw opening hand</button>
+      <button class="btn small" id="mull" type="button" disabled>Mulligan</button>
+      <button class="btn small" id="drawOne" type="button" disabled>Draw for the turn</button>
+      <span class="note" id="handNote"></span>
+    </div>
+    <div class="hand" id="hand"></div>
+  </section>
+</main>
+
+<aside id="deck">
+  <div class="box">
+    <span class="eyebrow">Deck box</span>
+    <div class="big" id="count">0<small> / 99</small></div>
+    <div id="countNote" class="note"></div>
+    <div class="ledger" id="ledger"></div>
+  </div>
+  <div class="box">
+    <h2>Mana curve</h2>
+    <div class="curve" id="curve" aria-label="Nonland cards by mana value"></div>
+    <div class="curve-l"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7+</span></div>
+    <div class="note" id="avgMv"></div>
+  </div>
+  <div class="box" id="manaBox">
+    <h2>Mana check</h2>
+    <div id="manaOut"></div>
+    <button class="btn small" id="rebalance" type="button" hidden>Rebalance basics to match my spells</button>
+  </div>
+  <div class="box">
+    <h2 id="budgetBoxH">Budget</h2>
+    <div class="row" style="justify-content:space-between"><span id="spent" class="big" style="font-size:1.6rem"></span><span id="budgetOf" class="muted small"></span></div>
+    <div class="meter" id="meter"><i></i></div>
+    <div class="note" id="deckValue"></div>
+    <div class="row" id="budgetBtns">
+      <button class="btn small" id="fitBtn" type="button">Fit to budget</button>
+      <button class="btn small" id="upBtn" type="button">Spend leftover on upgrades</button>
+    </div>
+    <label class="toggle" id="ownedFreeRow" hidden><input type="checkbox" id="ownedFree" checked> Don't count cards I own toward the budget</label>
+    <span class="note" id="priceNote"></span>
+  </div>
+  <div class="box shop" id="shopBox" hidden>
+    <h2>Shopping list</h2>
+    <div id="shopSum"></div>
+    <div class="row">
+      <button class="btn small" id="shopCopy" type="button">Copy list</button>
+      <a class="small" id="shopTcg" href="https://www.tcgplayer.com/massentry" target="_blank" rel="noopener">Open in TCGplayer</a>
+    </div>
+    <button class="btn small ghost" id="shopBought" type="button">I bought these. Add them to my collection</button>
+  </div>
+  <div class="box">
+    <h2>Bracket check</h2>
+    <div id="verdict" class="verdict ok"></div>
+    <div class="audit" id="audit"></div>
+  </div>
+  <div class="box">
+    <h2>Export</h2>
+    <div class="seg" role="group" aria-label="Export format"><button type="button" data-fmt="archidekt">Archidekt</button><button type="button" data-fmt="moxfield">Moxfield</button></div>
+    <textarea id="exportText" readonly aria-label="Decklist export"></textarea>
+    <div class="row">
+      <button class="btn primary small" id="copyBtn" type="button">Copy list</button>
+      <button class="btn small" id="dlBtn" type="button" hidden>Save .txt</button>
+      <a class="small" id="openSite" href="https://archidekt.com/" target="_blank" rel="noopener">Open Archidekt</a>
+    </div>
+    <span class="note" id="exportNote"></span>
+  </div>
+  <div class="box" id="aiBox">
+    <h2>AI engine</h2>
+    <div class="seg" role="group" aria-label="AI engine"><button type="button" data-ai="claude">Claude</button><button type="button" data-ai="gemini">Google Gemini</button></div>
+    <span class="note" id="aiClaudeNote">Built in when this page runs in Claude. Uses your Claude plan; no key needed.</span>
+    <div id="aiGem" style="display:grid;gap:8px" hidden>
+      <div class="warnbox small" id="gemInClaude" hidden>This copy runs inside Claude, which blocks connections to outside services, so Gemini can't run here. It switches on automatically in your self-hosted version.</div>
+      <label class="f">Gemini API key<input id="gemKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from Google AI Studio"></label>
+      <div class="two"><label class="f">Main model<input id="gemModel" type="text" spellcheck="false"></label><label class="f">Fast model<input id="gemFast" type="text" spellcheck="false"></label></div>
+      <div class="row"><button class="btn small" id="gemTest" type="button">Save and test</button><a class="small" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get a free key</a></div>
+      <span class="note" id="gemNote">Your key is saved only in this browser. It never goes into your saved builds, collection or exports.</span>
+    </div>
+  </div>
+  <div class="box">
+    <h2>Saved builds</h2>
+    <div class="saved" id="saved"></div>
+    <span class="note">Builds save automatically in this browser.</span>
+  </div>
+</aside>
+</div>
+
+<div class="collwrap" id="collectionView" hidden>
+  <section class="step" aria-labelledby="hc0">
+    <div class="step-h"><h2 id="hc0">My collection</h2><span class="sync" id="collSync"><i></i><span>Loading…</span></span></div>
+    <div class="cstats" id="collStats"></div>
+  </section>
+  <div class="cgrid">
+    <section class="step" aria-labelledby="hc1">
+      <div class="step-h"><h2 id="hc1">Upload a spreadsheet</h2></div>
+      <label class="drop" id="drop" for="collFile"><input type="file" id="collFile" accept=".xlsx,.xls,.xlsm,.ods,.csv,.tsv,.txt"><b>Choose a file or drop it here</b><span class="note">Excel, CSV or text. Exports from Moxfield, Archidekt, ManaBox, Deckbox, Dragon Shield and TCGplayer work, or any sheet with a card name column and a quantity column.</span></label>
+      <div id="upPreview"></div>
+    </section>
+    <section class="step" aria-labelledby="hc2">
+      <div class="step-h"><h2 id="hc2">Add cards</h2></div>
+      <form id="addForm" class="row">
+        <input id="addQty" type="number" min="1" value="1" inputmode="numeric" style="width:72px" aria-label="Copies">
+        <div class="ac"><input id="addName" type="text" placeholder="Card name" autocomplete="off" spellcheck="false" aria-label="Card name" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addList"><ul id="addList" class="ac-list" role="listbox" aria-label="Matching cards" hidden></ul></div>
+        <button class="btn primary" type="submit">Add</button>
+      </form>
+      <label class="f">Or paste a list, one card per line
+        <textarea id="pasteList" spellcheck="false" placeholder="4 Sol Ring&#10;1 Rhystic Study&#10;Arcane Signet"></textarea>
+      </label>
+      <div class="row"><button class="btn small" id="pasteBtn" type="button">Add pasted cards</button><span class="note" id="pasteNote"></span></div>
+    </section>
+  </div>
+  <section class="step" aria-labelledby="hc3">
+    <div class="step-h"><h2 id="hc3">Cards</h2></div>
+    <div class="row">
+      <input id="collSearch" type="text" class="grow" placeholder="Search your cards" aria-label="Search your cards">
+      <select id="collSort" aria-label="Sort"><option value="name">A–Z</option><option value="qty">Most copies</option><option value="recent">Recently added</option></select>
+      <button class="btn small" id="collCopy" type="button">Copy as list</button>
+      <button class="btn small" id="collDl" type="button" hidden>Save .csv</button>
+      <button class="btn small ghost" id="collClear" type="button">Delete all</button>
+    </div>
+    <div id="collTable" class="ctable"></div>
+  </section>
+</div>
+
+<div class="mobilebar"><span id="mbCount">0 / 99</span><a href="#deck">Deck box ↓</a></div>
+<div class="toast" id="toast" hidden></div>
+<script src="js/app.js"></script>
+</body>
+</html>

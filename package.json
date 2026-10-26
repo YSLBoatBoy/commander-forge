@@ -1,0 +1,14 @@
+{
+  "name": "commander-forge",
+  "version": "1.0.0",
+  "description": "Self-hosted Magic: The Gathering Commander deckbuilder with live Scryfall, EDHREC and Commander Spellbook data.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "build:artifact": "node tools/build-artifact.js"
+  }
+}
