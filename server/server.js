@@ -135,6 +135,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
         } catch (e) {
           if (ctl.signal.aborted) return res.end();
           const err = e instanceof AiError ? e : new AiError("upstream_error", "Couldn't reach the AI service.", 502);
+          console.error(`[ai] error ${err.code}: ${err.message}`);
           if (started) { res.write("\u0000ERR" + JSON.stringify({ code: err.code, message: err.message })); return res.end(); }
           return send(res, err.status, { code: err.code, message: err.message });
         }

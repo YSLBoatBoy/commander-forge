@@ -7,7 +7,7 @@
   "license": "MIT",
   "engines": { "node": ">=22.13" },
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning server/server.js",
+    "start": "node --disable-warning=ExperimentalWarning --dns-result-order=ipv4first server/server.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
     "build:artifact": "node tools/build-artifact.js"
   }

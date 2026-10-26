@@ -163,3 +163,15 @@ test("data survives a restart", async () => {
   await new Promise((r) => server.close(r));
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test("AI gives up with a clear message when the provider goes silent", async () => {
+  const { runAi } = await import("../server/ai.js");
+  const hang = (url, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+  const cfg = { provider: "gemini", gemini: { key: "K", model: "m", fast: "f" }, anthropic: {} };
+  await assert.rejects(
+    runAi(cfg, { prompt: "hi", onDelta() {}, fetchImpl: hang, timeouts: { firstMs: 50, idleMs: 50 } }),
+    (e) => e.code === "timeout" && /didn't answer within/.test(e.message),
+  );
+  const boom = async () => { throw new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } }); };
+  await assert.rejects(runAi(cfg, { prompt: "hi", onDelta() {}, fetchImpl: boom }), (e) => e.code === "unreachable" && /ENOTFOUND/.test(e.message));
+});

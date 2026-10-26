@@ -47,7 +47,8 @@ export async function geminiStream({ key, model, prompt, json, signal, onDelta, 
   const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
     method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body), signal,
   });
-  if (!res.ok) { let m = ""; try { m = (await res.json()).error?.message || ""; } catch {} throw httpError("Gemini", res.status, m); }
+  if (process.env.AI_LOG !== "0") console.log(`[ai] Gemini ${model} HTTP ${res.status}`);
+  if (!res.ok) { let m = ""; try { m = (await res.json()).error?.message || ""; } catch {} if (process.env.AI_LOG !== "0") console.log(`[ai] Gemini error: ${m}`); throw httpError("Gemini", res.status, m); }
   let finish = "";
   await readSse(res, (ev) => {
     if (ev.promptFeedback?.blockReason) throw new AiError("refused", `Gemini blocked this request (${ev.promptFeedback.blockReason}).`, 400);
@@ -111,11 +112,41 @@ export function publicAiSettings(cfg) {
   };
 }
 
-export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImpl }) {
+// Gives up if the provider goes quiet: no first text within firstMs, or a gap longer than idleMs.
+export const TIMEOUTS = { firstMs: 90_000, idleMs: 60_000 };
+
+export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImpl, timeouts = TIMEOUTS }) {
   const p = cfg.provider === "anthropic" ? "anthropic" : "gemini";
   const c = cfg[p];
+  const name = p === "gemini" ? "Gemini" : "Anthropic";
   if (!c.key) throw new AiError("no_key", p === "gemini" ? "Add a Google Gemini API key in AI engine settings." : "Add an Anthropic API key in AI engine settings.", 400);
   const model = tier === "quick" ? c.fast : c.model;
   const fn = p === "gemini" ? geminiStream : anthropicStream;
-  return fn({ key: c.key, model, prompt, json, signal, onDelta, fetchImpl });
+  const ctl = new AbortController();
+  let timedOut = "";
+  let timer = setTimeout(() => { timedOut = "first"; ctl.abort(); }, timeouts.firstMs);
+  const onOuter = () => ctl.abort();
+  signal?.addEventListener("abort", onOuter);
+  const started = Date.now();
+  try {
+    return await fn({
+      key: c.key, model, prompt, json, signal: ctl.signal, fetchImpl,
+      onDelta: (t) => { clearTimeout(timer); timer = setTimeout(() => { timedOut = "idle"; ctl.abort(); }, timeouts.idleMs); onDelta(t); },
+    });
+  } catch (e) {
+    if (timedOut) {
+      const secs = Math.round((timedOut === "first" ? timeouts.firstMs : timeouts.idleMs) / 1000);
+      throw new AiError("timeout", timedOut === "first"
+        ? `${name} (${model}) didn't answer within ${secs} seconds. Check that your server can reach ${p === "gemini" ? "generativelanguage.googleapis.com" : "api.anthropic.com"}, then try again.`
+        : `${name} stopped answering partway through. Try again.`, 504);
+    }
+    if (signal?.aborted) throw e;
+    if (e instanceof AiError) throw e;
+    const cause = e?.cause?.code || e?.cause?.message || e?.message || String(e);
+    throw new AiError("unreachable", `Couldn't reach ${name} from your server (${cause}).`, 502);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onOuter);
+    if (process.env.AI_LOG !== "0") console.log(`[ai] ${name} ${model} ${Date.now() - started}ms`);
+  }
 }
