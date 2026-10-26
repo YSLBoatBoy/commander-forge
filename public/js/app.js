@@ -363,6 +363,9 @@ function renderPlans(){
   if(!S.gameplans.length){ el.innerHTML=`<div class="empty">${S.mode==="import"?"Import a deck to see the popular directions for its commander.":"Analyze a commander to see the ways people build it."}</div>`; $("custom").value=S.custom||""; return; }
   el.innerHTML = S.gameplans.map(p=>`<button type="button" class="plan" data-id="${esc(p.id)}" aria-pressed="${S.chosen.includes(p.id)}"><b>${esc(p.name)}</b>${p.decks?`<span class="decks">${p.decks.toLocaleString()} decks on EDHREC</span>`:""}${p.fit?`<span class="chips"><span class="chip fit ${esc(p.fit)}">${p.fit==="strong"?"Your deck already does this":p.fit==="some"?"Your deck partly does this":"Would mean bigger changes"}</span></span>${p.fitNote?`<span class="keys">${esc(p.fitNote)}</span>`:""}`:""}${!p.pitch&&!p.fit&&S.mode==="import"&&!sample?'<span class="keys">Descriptions need Claude.</span>':""}<span class="small">${p.pitch?esc(p.pitch):(running.length||$("importBtn").disabled?'<span class="muted">Writing a description…</span>':"")}</span>${p.mechanics&&p.mechanics.length?`<span class="chips">${p.mechanics.map(m=>`<span class="chip">${esc(m)}</span>`).join("")}</span>`:""}${p.keyCards&&p.keyCards.length?`<span class="keys">Key cards: ${p.keyCards.map(esc).join(", ")}</span>`:""}</button>`).join("");
   $("custom").value=S.custom||"";
+  if(S.gameplans.length && !S.gameplans.some(g=>g.pitch) && sample && !running.length){
+    el.insertAdjacentHTML("beforeend",`<div class="row" style="grid-column:1/-1"><button type="button" class="btn small" id="redesc">Write descriptions</button><span class="note">${S.plansFailed?"The last attempt didn't come back with descriptions.":"Get a short description of each gameplan."}</span></div>`);
+  }
 }
 function renderBracket(){
   $("brackets").innerHTML = [1,2,3,4,5].map(n=>`<button type="button" class="bk" data-b="${n}" aria-pressed="${S.bracket===n}"><span class="n">${n}</span><span class="l">${BRACKETS[n].name}</span></button>`).join("");
@@ -774,11 +777,31 @@ ${S.gameplans.length?`These are the most popular EDHREC themes for it, with deck
 ${imp?`THE PLAYER'S CURRENT DECK: ${deck}\n`:""}Reply with only one JSON object: {"overview":"2 sentences on what makes this commander tick${imp?", and how this particular deck currently tries to win":""}","plans":[{"id":"<theme slug from the list, or a new short-kebab id>","name":"<theme name>","pitch":"1-2 sentences on how this version plays and wins","mechanics":["3 short tags"],"keyCards":["3 signature cards"]${imp?`,"fit":"strong|some|little","fitNote":"max 14 words: how much the current deck already does this"`:""}}]}
 ${S.gameplans.length?`Cover these slugs, in this order: ${S.gameplans.map(g=>g.id).join(", ")}. Merge any that are not real strategies (like tribal flavor tags) into a pitch that still makes sense.`:`Give 4-5 genuinely different gameplans real players build${imp?", starting with the one this deck already follows":", most popular first"}.`}
 ${imp?`"fit" is "strong" if the deck already mostly plays this way, "some" if partly, "little" if it would need many changes. For keyCards, prefer cards NOT already in the deck.`:""}`,{signal,modelTier:"quick"});
-  S.overview=String(r&&r.overview||"");
-  const extra=(r&&Array.isArray(r.plans)?r.plans:[]);
-  const take=(g,m)=>{ g.pitch=String(m.pitch||""); g.mechanics=(m.mechanics||[]).map(String).slice(0,4); g.keyCards=(m.keyCards||[]).map(String).slice(0,3); if(m.fit) { g.fit=String(m.fit).toLowerCase(); g.fitNote=String(m.fitNote||""); } };
-  if(S.gameplans.length){ S.gameplans.forEach(g=>{ const m=extra.find(p=>p.id===g.id)||extra.find(p=>key(p.name)===key(g.name)); if(m) take(g,m); }); }
-  else { S.gameplans=extra.map((p,i)=>{ const g={id:String(p.id||"plan"+i),name:String(p.name||"Plan "+(i+1))}; take(g,p); return g; }); if(!imp) S.chosen=S.gameplans.length?[S.gameplans[0].id]:[]; }
+  const {overview, plans:extra} = readPlansAnswer(r);
+  if(overview) S.overview=overview;
+  const take=(g,m)=>{ const pitch=m.pitch||m.description||m.summary||m.how||m.text||""; g.pitch=String(pitch); const tags=m.mechanics||m.tags||m.keywords||[]; g.mechanics=(Array.isArray(tags)?tags:String(tags).split(/,\s*/)).map(String).slice(0,4); const kc=m.keyCards||m.key_cards||m.cards||[]; g.keyCards=(Array.isArray(kc)?kc:String(kc).split(/;\s*|,\s*(?=[A-Z])/)).map(x=>String(x&&x.name||x)).slice(0,3); if(m.fit) { g.fit=String(m.fit).toLowerCase(); g.fitNote=String(m.fitNote||m.fit_note||""); } };
+  if(S.gameplans.length){
+    const norm=x=>slugify(String(x||"")).replace(/[^a-z0-9]/g,"");
+    const used=new Set();
+    S.gameplans.forEach((g,i)=>{
+      let m=extra.find(p=>!used.has(p)&&(norm(p.id)===norm(g.id)||norm(p.name)===norm(g.name)||norm(p.slug)===norm(g.id)||norm(p.theme)===norm(g.name)))
+        || extra.find(p=>!used.has(p)&&(norm(p.name).includes(norm(g.name))||norm(g.name).includes(norm(p.name))&&norm(p.name).length>3));
+      if(!m && extra.length===S.gameplans.length && !used.has(extra[i])) m=extra[i];
+      if(m){ used.add(m); take(g,m); }
+    });
+  }
+  else { S.gameplans=extra.map((p,i)=>{ const g={id:String(p.id||slugify(p.name||"")||"plan"+i),name:String(p.name||p.theme||"Plan "+(i+1))}; take(g,p); return g; }); if(!imp) S.chosen=S.gameplans.length?[S.gameplans[0].id]:[]; }
+  S.plansFailed = !S.gameplans.some(g=>g.pitch);
+  if(S.plansFailed){ try{ console.warn("Gameplan descriptions: unexpected answer", r); }catch(e){} throw {code:"no_plans",message:"The AI's answer didn't include gameplan descriptions. Click “Write descriptions” on the Gameplan step to try again."}; }
+}
+// Accepts the shapes models actually return: {overview, plans}, {gameplans}, {themes}, a bare list, or a list wrapping the object.
+function readPlansAnswer(r){
+  let o=r;
+  if(Array.isArray(o)) o = (o.length===1&&o[0]&&typeof o[0]==="object"&&!Array.isArray(o[0])&&(o[0].plans||o[0].gameplans||o[0].themes)) ? o[0] : {plans:o};
+  if(!o||typeof o!=="object") return {overview:"",plans:[]};
+  let plans=o.plans||o.gameplans||o.game_plans||o.themes||o.strategies||o.archetypes||[];
+  if(plans&&!Array.isArray(plans)&&typeof plans==="object") plans=Object.entries(plans).map(([k,v])=>Object.assign({id:k,name:k},typeof v==="object"?v:{pitch:String(v)}));
+  return {overview:String(o.overview||o.summary||o.commanderOverview||""), plans:(Array.isArray(plans)?plans:[]).filter(p=>p&&typeof p==="object")};
 }
 async function analyze(q){
   if(needClaude()) return;
@@ -802,7 +825,7 @@ async function analyze(q){
       await loadEdhForCommander(st);
       if(S.edh){ S.gameplans=S.edh.themes.slice(0,8).map(t=>({id:t.slug,name:t.name,decks:t.count})); S.chosen=S.gameplans.length?[S.gameplans[0].id]:[]; }
       render();
-      await describePlans(ctl.signal, st);
+      try{ await describePlans(ctl.signal, st); }catch(e){ if(e&&e.code==="cancelled") throw e; S.plansFailed=true; }
     } else {
       statusLine(st,"Reading the commander and its common builds…");
       const r = await sample.json(`You are an expert Magic: The Gathering Commander (EDH) deckbuilder. The player wants to build around: "${q}".
@@ -965,8 +988,8 @@ async function importDeck(){
     });
     if(LIVE && S.commanders.length){ statusLine(st,"Pulling EDHREC data for your commander…"); await loadEdhForCommander(st); if(S.edh){ S.cards.forEach(applyLive); S.gameplans=S.edh.themes.slice(0,8).map(t=>({id:t.slug,name:t.name,decks:t.count})); } }
     if(!S.colors.length && !LIVE) S.colors=["W","U","B","R","G"];
-    if(S.commanders.length && sample){ render(); try{ await describePlans(undefined, st); }catch(e){} }
-    st.innerHTML = `<span>Imported ${S.cards.length+Object.values(S.basics).reduce((a,b)=>a+b,0)} cards${S.commanders.length?" with "+esc(S.commanders.map(c=>c.name).join(" + "))+" as commander":""}. Set your bracket and upgrade budget, then choose "Suggest upgrades".</span>`;
+    let planErr=""; if(S.commanders.length && sample){ render(); try{ await describePlans(undefined, st); }catch(e){ planErr=errMsg(e); } }
+    st.innerHTML = `<span>Imported ${S.cards.length+Object.values(S.basics).reduce((a,b)=>a+b,0)} cards${S.commanders.length?" with "+esc(S.commanders.map(c=>c.name).join(" + "))+" as commander":""}. Set your bracket and upgrade budget, then choose "Suggest upgrades".</span>`+(planErr?`<div class="warnbox" style="flex-basis:100%">${esc(planErr)}</div>`:"");
     render(); save();
   }catch(e){ st.innerHTML=`<div class="err">${esc(errMsg(e))}</div>`; }
   finally{ setBusy(false); }
@@ -1726,12 +1749,12 @@ $("importCmdr").addEventListener("change",async e=>{
   const d=CARDDB[key(name)]; S.commanders=[d?{name:d.name,manaCost:d.mana,type:d.type,text:d.text}:{name,manaCost:"",type:"",text:""}];
   S.colors=d?["W","U","B","R","G"].filter(c=>d.ci.includes(c)):S.colors;
   S.edh=null; S.gameplans=[]; if(LIVE){ setBusy(true); await loadEdhForCommander($("importStatus")); if(S.edh){ S.cards.forEach(applyLive); S.gameplans=S.edh.themes.slice(0,8).map(t=>({id:t.slug,name:t.name,decks:t.count})); } setBusy(false); }
-  render(); if(sample){ setBusy(true); try{ await describePlans(undefined, $("importStatus")); }catch(e){} $("importStatus").innerHTML=""; setBusy(false); }
+  render(); if(sample){ setBusy(true); try{ await describePlans(undefined, $("importStatus")); $("importStatus").innerHTML=""; }catch(e){ $("importStatus").innerHTML=`<div class="warnbox">${esc(errMsg(e))}</div>`; } setBusy(false); }
   render(); save();
 });
 $("stopBtn").addEventListener("click",()=>running.forEach(c=>c.abort()));
 $("buildBtn").addEventListener("click",build);
-$("plans").addEventListener("click",e=>{ const b=e.target.closest(".plan"); if(!b) return; const id=b.dataset.id; if(S.chosen.includes(id)) S.chosen=S.chosen.filter(x=>x!==id); else { S.chosen.push(id); if(S.chosen.length>2) S.chosen.shift(); } renderPlans(); save(); });
+$("plans").addEventListener("click",async e=>{ if(e.target.id==="redesc"){ const st=S.mode==="import"?$("importStatus"):$("cmdStatus"); const ctl=new AbortController(); running=[ctl]; setBusy(true); renderPlans(); try{ await describePlans(ctl.signal, st); st.innerHTML=""; }catch(err){ st.innerHTML=err&&err.code==="cancelled"?"":`<div class="warnbox">${esc(errMsg(err))}</div>`; } running=[]; setBusy(false); renderPlans(); renderCommander(); save(); return; } const b=e.target.closest(".plan"); if(!b) return; const id=b.dataset.id; if(S.chosen.includes(id)) S.chosen=S.chosen.filter(x=>x!==id); else { S.chosen.push(id); if(S.chosen.length>2) S.chosen.shift(); } renderPlans(); save(); });
 $("custom").addEventListener("input",e=>{S.custom=e.target.value; save();});
 $("must").addEventListener("input",e=>{S.must=e.target.value; save();});
 $("avoid").addEventListener("input",e=>{S.avoid=e.target.value; save();});

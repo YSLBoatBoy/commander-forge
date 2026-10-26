@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -113,4 +113,34 @@ test("tolerant JSON parsing of AI answers", () => {
   assert.deepEqual(plain(T.parseLoose('Here you go: {"a":2} hope that helps')), { a: 2 });
   assert.throws(() => T.parseLoose("nope"));
   assert.deepEqual(plain(T.pipCount("{2}{W}{U/B}{B}")), { W: 1, U: 0.5, B: 1.5, R: 0, G: 0 });
+});
+
+test("gameplan descriptions fill in whatever shape the AI answers with", async () => {
+  const shapes = [
+    { overview: "O", plans: [{ id: "elves", name: "Elves", pitch: "Go wide with elves." }, { id: "combo", name: "Combo", pitch: "Assemble a combo." }] },
+    [{ name: "Elves", description: "Go wide with elves." }, { name: "Combo", description: "Assemble a combo." }],
+    [{ overview: "O", gameplans: [{ theme: "elves", summary: "Go wide with elves." }, { theme: "combo", summary: "Assemble a combo." }] }],
+    { themes: [{ id: "Tribal Elves", pitch: "Go wide with elves." }, { id: "Infinite combo", pitch: "Assemble a combo." }] },
+  ];
+  for (const ans of shapes) {
+    const { T } = loadPage();
+    T.S.commanders = [{ name: "Lathril, Blade of the Elves", text: "Menace" }];
+    T.S.gameplans = [{ id: "elves", name: "Elves", decks: 494 }, { id: "combo", name: "Combo", decks: 338 }];
+    const fake = () => Promise.resolve({ text: "" });
+    fake.json = async () => ans;
+    T.setSample(fake);
+    await T.describePlans();
+    assert.deepEqual(plain(T.S.gameplans.map((g) => g.pitch)), ["Go wide with elves.", "Assemble a combo."], JSON.stringify(ans));
+  }
+});
+
+test("a useless AI answer is reported instead of failing silently", async () => {
+  const { T } = loadPage();
+  T.S.commanders = [{ name: "X", text: "" }];
+  T.S.gameplans = [{ id: "elves", name: "Elves" }];
+  const fake = () => Promise.resolve({ text: "" });
+  fake.json = async () => ({ hello: "world" });
+  T.setSample(fake);
+  await assert.rejects(T.describePlans(), (e) => e.code === "no_plans");
+  assert.equal(T.S.plansFailed, true);
 });
