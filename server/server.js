@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { openDb } from "./db.js";
 import { proxyFetch } from "./proxy.js";
-import { resolveAi, publicAiSettings, runAi, AiError } from "./ai.js";
+import { resolveAi, publicAiSettings, runAi, listModels, AiError } from "./ai.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
@@ -102,6 +102,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
           const cur = db.kvGet("ai_settings", {}) || {};
           const next = { ...cur };
           if (b.provider && ["gemini", "anthropic"].includes(b.provider)) next.provider = b.provider;
+          if (typeof b.autoFallback === "boolean") next.autoFallback = b.autoFallback;
           for (const [from, to] of [["geminiKey", "geminiKey"], ["anthropicKey", "anthropicKey"]]) {
             if (typeof b[from] === "string" && b[from].trim()) next[to] = b[from].trim();
             if (b[from] === null) delete next[to];
@@ -110,6 +111,10 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
           db.kvSet("ai_settings", next);
           return send(res, 200, publicAiSettings(resolveAi(db, env)));
         }
+      }
+
+      if (p === "/api/ai/models" && req.method === "GET") {
+        return send(res, 200, await listModels(resolveAi(db, env), url.searchParams.get("provider") || "", fetchImpl));
       }
 
       // ---- AI: streams plain text; an error after streaming starts arrives as "\u0000ERR" + JSON ----
@@ -124,8 +129,8 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
         try {
           const out = await runAi(cfg, {
             prompt, tier: b.tier, json: !!b.json, signal: ctl.signal, fetchImpl,
-            onDelta: (t) => {
-              if (!started) { started = true; res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" }); }
+            onDelta: (t, model, skipped) => {
+              if (!started) { started = true; res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-AI-Model": model, "X-AI-Skipped": (skipped || []).map((s) => s.model + ":" + s.code).join(",") }); }
               res.write(t);
             },
           });

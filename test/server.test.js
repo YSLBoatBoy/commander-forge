@@ -19,6 +19,15 @@ async function fakeFetch(url, init = {}) {
   const u = String(url);
   if (u.startsWith("https://api.scryfall.com/")) return new Response(JSON.stringify({ object: "card", name: "Sol Ring" }), { status: 200 });
   if (u.startsWith("https://json.edhrec.com/missing")) return new Response("{}", { status: 404 });
+  if (u.includes("generativelanguage.googleapis.com/v1beta/models?pageSize")) {
+    return new Response(JSON.stringify({ models: [
+      { name: "models/gemini-3.6-flash", displayName: "Gemini 3.6 Flash", supportedGenerationMethods: ["generateContent"] },
+      { name: "models/gemini-3.8-flash", displayName: "Gemini 3.8 Flash", supportedGenerationMethods: ["generateContent"] },
+      { name: "models/gemini-3.8-flash-tts", displayName: "TTS", supportedGenerationMethods: ["generateContent"] },
+      { name: "models/text-embedding-9", displayName: "Embed", supportedGenerationMethods: ["embedContent"] },
+    ] }), { status: 200 });
+  }
+  if (u.includes("/models/gemini-busy:")) return new Response(JSON.stringify({ error: { message: "The model is overloaded." } }), { status: 503 });
   if (u.includes("generativelanguage.googleapis.com")) {
     if (init.headers["x-goog-api-key"] !== "GOODKEY") return new Response(JSON.stringify({ error: { message: "API key not valid." } }), { status: 400 });
     return new Response(sse([{ candidates: [{ content: { parts: [{ text: '{"ok":' }] } }] }, { candidates: [{ content: { parts: [{ text: "true}" }] }, finishReason: "STOP" }] }]), { status: 200 });
@@ -174,4 +183,27 @@ test("AI gives up with a clear message when the provider goes silent", async () 
   );
   const boom = async () => { throw new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } }); };
   await assert.rejects(runAi(cfg, { prompt: "hi", onDelta() {}, fetchImpl: boom }), (e) => e.code === "unreachable" && /ENOTFOUND/.test(e.message));
+});
+
+test("busy Gemini model falls back to the next one and says which answered", async () => {
+  await api("/api/settings/ai", { method: "PUT", body: { provider: "gemini", geminiKey: "GOODKEY", geminiModel: "gemini-busy", autoFallback: true } });
+  const r = await api("/api/ai", { method: "POST", body: { prompt: "say ok" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.text, '{"ok":true}');
+  assert.equal(r.headers.get("x-ai-model"), "gemini-3.8-flash");
+  assert.equal(r.headers.get("x-ai-skipped"), "gemini-busy:overloaded");
+  await api("/api/settings/ai", { method: "PUT", body: { autoFallback: false } });
+  const off = await api("/api/ai", { method: "POST", body: { prompt: "say ok" } });
+  assert.equal(off.status, 503);
+  assert.equal(off.json.code, "overloaded");
+  await api("/api/settings/ai", { method: "PUT", body: { autoFallback: true, geminiModel: "gemini-3.8-flash" } });
+});
+
+test("model list comes from the provider, filtered and in fallback order", async () => {
+  const r = await api("/api/ai/models?provider=gemini");
+  assert.equal(r.json.live, true);
+  const ids = r.json.models.map((m) => m.id);
+  assert.deepEqual(ids.slice(0, 2), ["gemini-3.8-flash", "gemini-3.6-flash"]);
+  assert.ok(!ids.includes("gemini-3.8-flash-tts"));
+  assert.ok(!ids.some((i) => i.includes("embedding")));
 });

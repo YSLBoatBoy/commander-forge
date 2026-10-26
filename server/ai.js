@@ -80,12 +80,21 @@ export async function anthropicStream({ key, model, prompt, json, signal, onDelt
   return { finish };
 }
 
+// Models tried in order when the chosen one is busy. Live lists from the providers fill the dropdowns.
+export const ORDER = {
+  gemini: ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+  anthropic: ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"],
+};
+// Errors where trying another model can help (only before any text has streamed).
+const FALLBACK_ON = new Set(["overloaded", "rate_limited", "timeout", "bad_model", "upstream_error", "unreachable"]);
+
 // Settings come from the database, with environment variables taking priority.
 export function resolveAi(db, env = process.env) {
   const s = db.kvGet("ai_settings", {}) || {};
   const provider = (env.AI_PROVIDER || s.provider || DEFAULTS.provider).toLowerCase();
   return {
     provider,
+    autoFallback: s.autoFallback !== false,
     gemini: {
       key: env.GEMINI_API_KEY || s.geminiKey || "",
       model: env.GEMINI_MODEL || s.geminiModel || DEFAULTS.gemini.model,
@@ -107,46 +116,122 @@ export function publicAiSettings(cfg) {
   return {
     provider: cfg.provider,
     providerFromEnv: cfg.providerFromEnv,
+    autoFallback: cfg.autoFallback,
     gemini: { model: cfg.gemini.model, fast: cfg.gemini.fast, hasKey: !!cfg.gemini.key, keyHint: mask(cfg.gemini.key), keyFromEnv: cfg.gemini.keyFromEnv },
     anthropic: { model: cfg.anthropic.model, fast: cfg.anthropic.fast, hasKey: !!cfg.anthropic.key, keyHint: mask(cfg.anthropic.key), keyFromEnv: cfg.anthropic.keyFromEnv },
   };
 }
 
-// Gives up if the provider goes quiet: no first text within firstMs, or a gap longer than idleMs.
-export const TIMEOUTS = { firstMs: 90_000, idleMs: 60_000 };
+// The order to try models in: your pick first, then the rest (lighter models first for quick tasks).
+export function candidates(cfg, provider, tier) {
+  const c = cfg[provider];
+  const order = ORDER[provider];
+  const list = tier === "quick" ? [c.fast, ...order.slice().reverse(), c.model] : [c.model, ...order, c.fast];
+  const out = [...new Set(list.filter(Boolean))];
+  return cfg.autoFallback ? out.slice(0, 5) : out.slice(0, 1);
+}
 
-export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImpl, timeouts = TIMEOUTS }) {
-  const p = cfg.provider === "anthropic" ? "anthropic" : "gemini";
-  const c = cfg[p];
+// Gives up if the provider goes quiet: no first text within firstMs, or a gap longer than idleMs.
+export const TIMEOUTS = { firstMs: 60_000, idleMs: 60_000 };
+
+async function attempt(p, model, key, { prompt, json, signal, onDelta, fetchImpl, timeouts }) {
   const name = p === "gemini" ? "Gemini" : "Anthropic";
-  if (!c.key) throw new AiError("no_key", p === "gemini" ? "Add a Google Gemini API key in AI engine settings." : "Add an Anthropic API key in AI engine settings.", 400);
-  const model = tier === "quick" ? c.fast : c.model;
   const fn = p === "gemini" ? geminiStream : anthropicStream;
   const ctl = new AbortController();
-  let timedOut = "";
+  let timedOut = "", streamed = false;
   let timer = setTimeout(() => { timedOut = "first"; ctl.abort(); }, timeouts.firstMs);
   const onOuter = () => ctl.abort();
   signal?.addEventListener("abort", onOuter);
-  const started = Date.now();
   try {
-    return await fn({
-      key: c.key, model, prompt, json, signal: ctl.signal, fetchImpl,
-      onDelta: (t) => { clearTimeout(timer); timer = setTimeout(() => { timedOut = "idle"; ctl.abort(); }, timeouts.idleMs); onDelta(t); },
+    const out = await fn({
+      key, model, prompt, json, signal: ctl.signal, fetchImpl,
+      onDelta: (t) => { streamed = true; clearTimeout(timer); timer = setTimeout(() => { timedOut = "idle"; ctl.abort(); }, timeouts.idleMs); onDelta(t); },
     });
+    return out;
   } catch (e) {
+    let err = e;
     if (timedOut) {
       const secs = Math.round((timedOut === "first" ? timeouts.firstMs : timeouts.idleMs) / 1000);
-      throw new AiError("timeout", timedOut === "first"
-        ? `${name} (${model}) didn't answer within ${secs} seconds. Check that your server can reach ${p === "gemini" ? "generativelanguage.googleapis.com" : "api.anthropic.com"}, then try again.`
-        : `${name} stopped answering partway through. Try again.`, 504);
+      err = new AiError("timeout", timedOut === "first" ? `${name} (${model}) didn't answer within ${secs} seconds.` : `${name} stopped answering partway through. Try again.`, 504);
+    } else if (signal?.aborted) {
+      throw e;
+    } else if (!(e instanceof AiError)) {
+      const cause = e?.cause?.code || e?.cause?.message || e?.message || String(e);
+      err = new AiError("unreachable", `Couldn't reach ${name} from your server (${cause}).`, 502);
     }
-    if (signal?.aborted) throw e;
-    if (e instanceof AiError) throw e;
-    const cause = e?.cause?.code || e?.cause?.message || e?.message || String(e);
-    throw new AiError("unreachable", `Couldn't reach ${name} from your server (${cause}).`, 502);
+    err.streamed = streamed;
+    throw err;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onOuter);
-    if (process.env.AI_LOG !== "0") console.log(`[ai] ${name} ${model} ${Date.now() - started}ms`);
+  }
+}
+
+// onDelta(text, model) is called with the model that is actually answering.
+// Resolves {finish, model, skipped:[{model, code}]}.
+export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImpl, timeouts = TIMEOUTS }) {
+  const p = cfg.provider === "anthropic" ? "anthropic" : "gemini";
+  const c = cfg[p];
+  if (!c.key) throw new AiError("no_key", p === "gemini" ? "Add a Google Gemini API key in AI engine settings." : "Add an Anthropic API key in AI engine settings.", 400);
+  const list = candidates(cfg, p, tier);
+  const skipped = [];
+  let last;
+  for (const model of list) {
+    const started = Date.now();
+    try {
+      const out = await attempt(p, model, c.key, { prompt, json, signal, fetchImpl, timeouts, onDelta: (t) => onDelta(t, model, skipped) });
+      if (process.env.AI_LOG !== "0") console.log(`[ai] ${p} ${model} ok ${Date.now() - started}ms${skipped.length ? " after " + skipped.map((s) => s.model + ":" + s.code).join(", ") : ""}`);
+      return { ...out, model, skipped };
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      last = e;
+      if (process.env.AI_LOG !== "0") console.log(`[ai] ${p} ${model} failed (${e.code}): ${e.message}`);
+      if (e.streamed || !FALLBACK_ON.has(e.code)) throw e;
+      skipped.push({ model, code: e.code });
+    }
+  }
+  if (skipped.length > 1) {
+    const allBusy = skipped.every((s) => s.code === "overloaded" || s.code === "rate_limited");
+    throw new AiError(last.code, allBusy
+      ? `Every ${p === "gemini" ? "Gemini" : "Claude"} model is busy right now (tried ${skipped.map((s) => s.model).join(", ")}). Wait a minute and try again.`
+      : `${last.message} Also tried: ${skipped.map((s) => s.model).join(", ")}.`, last.status);
+  }
+  throw last;
+}
+
+// Lists models for the dropdowns. Falls back to the built-in order if the provider can't be asked.
+const modelCache = new Map();
+export async function listModels(cfg, provider, fetchImpl = fetch) {
+  const p = provider === "anthropic" ? "anthropic" : "gemini";
+  const c = cfg[p];
+  const fallback = ORDER[p].map((id) => ({ id, label: id }));
+  if (!c.key) return { models: fallback, live: false };
+  const ck = p + ":" + c.key.slice(-6);
+  const hit = modelCache.get(ck);
+  if (hit && Date.now() - hit.t < 3600e3) return hit.v;
+  try {
+    let models = [];
+    if (p === "gemini") {
+      const r = await fetchImpl("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": c.key }, signal: AbortSignal.timeout(15000) });
+      if (!r.ok) return { models: fallback, live: false };
+      const j = await r.json();
+      models = (j.models || [])
+        .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+        .map((m) => ({ id: String(m.name || "").replace(/^models\//, ""), label: m.displayName || m.name }))
+        .filter((m) => /^gemini-/.test(m.id) && !/(image|tts|live|embed|audio|transcribe|robotics|computer|omni|nano|banana|vision|aqa|learnlm)/i.test(m.id));
+    } else {
+      const r = await fetchImpl("https://api.anthropic.com/v1/models?limit=100", { headers: { "x-api-key": c.key, "anthropic-version": "2023-06-01" }, signal: AbortSignal.timeout(15000) });
+      if (!r.ok) return { models: fallback, live: false };
+      const j = await r.json();
+      models = (j.data || []).map((m) => ({ id: m.id, label: m.display_name || m.id }));
+    }
+    const rank = (id) => { const i = ORDER[p].indexOf(id); return i < 0 ? 99 : i; };
+    models.sort((a, b) => rank(a.id) - rank(b.id) || b.id.localeCompare(a.id));
+    for (const id of ORDER[p]) if (!models.some((m) => m.id === id)) models.push({ id, label: id + " (not listed)" });
+    const v = { models, live: true };
+    modelCache.set(ck, { t: Date.now(), v });
+    return v;
+  } catch {
+    return { models: fallback, live: false };
   }
 }

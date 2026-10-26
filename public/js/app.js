@@ -128,7 +128,7 @@ const EXAMPLE = {
 // ================= state & utils =================
 let S, sample=null, downloads=null, mcp=null, LIVE=false, running=[], saveTimer=null, uid=1;
 // SERVER is true when the page is served by the self-hosted Commander Forge server (see /server).
-let SERVER=false, SERVER_AI=null, BUILDS=null;
+let SERVER=false, SERVER_AI=null, BUILDS=null, SERVER_MODELS={}, LAST_AI=null;
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = v => { v=Number(v)||0; return v>=1000? "$"+Math.round(v).toLocaleString() : "$"+(v>=100?Math.round(v):v.toFixed(2)); };
@@ -590,6 +590,7 @@ async function serverCall(input,opts,asJson){
   try{ res=await fetch("api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,tier:opts.modelTier||"default",json:!!asJson}),signal:opts.signal}); }
   catch(e){ if(opts.signal&&opts.signal.aborted) throw {code:"cancelled"}; throw {code:"upstream_error",message:"Couldn't reach your Commander Forge server."}; }
   if(!res.ok){ let j={}; try{ j=await res.json(); }catch(e){} throw {code:j.code||"upstream_error",message:j.message||""}; }
+  noteModelUsed(res.headers.get("X-AI-Model"), res.headers.get("X-AI-Skipped"), opts.modelTier);
   const reader=res.body.getReader(), dec=new TextDecoder(); let raw="", shown=0;
   const MARK="\u0000ERR";
   try{
@@ -601,12 +602,26 @@ async function serverCall(input,opts,asJson){
   if(!text.trim()) throw {code:"empty_completion"};
   return {text,truncated:false};
 }
+let fbToastAt=0;
+function noteModelUsed(model, skipped, tier){
+  if(!model) return;
+  const sk=(skipped||"").split(",").filter(Boolean).map(x=>x.split(":")[0]);
+  LAST_AI={model,skipped:sk,tier,at:Date.now()};
+  if(sk.length && Date.now()-fbToastAt>15000){ fbToastAt=Date.now(); toast(`${sk.join(" and ")} ${sk.length>1?"were":"was"} busy, so this used ${model}.`); }
+  if(SERVER && !$("gemNote").dataset.keep) renderAiBox();
+}
 function serverSample(input,opts){ return serverCall(input,opts,false); }
 serverSample.json = async (input,opts)=>{ const r=await serverCall(input,opts,true); if(r.truncated) throw {code:"invalid_json",text:r.text}; return parseLoose(r.text); };
 const serverProvider = () => (SERVER_AI&&SERVER_AI.provider==="anthropic")?"anthropic":"gemini";
 function serverAiReady(){ return !!(SERVER_AI && SERVER_AI[serverProvider()] && SERVER_AI[serverProvider()].hasKey); }
-async function refreshServerAi(){ try{ SERVER_AI=await fetch("api/settings/ai").then(r=>r.json()); }catch(e){} }
-async function putServerAi(body){ const r=await fetch("api/settings/ai",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw {code:"upstream_error",message:"Couldn't save settings on your server."}; SERVER_AI=await r.json(); }
+async function refreshServerAi(){ try{ SERVER_AI=await fetch("api/settings/ai").then(r=>r.json()); }catch(e){} await loadServerModels(); }
+async function loadServerModels(){ const prov=serverProvider(); try{ SERVER_MODELS[prov]=await fetch("api/ai/models?provider="+prov).then(r=>r.json()); }catch(e){} }
+function fillModelSelect(sel, list, value){
+  const ids=list.map(m=>m.id); const opts=list.slice(); if(value&&!ids.includes(value)) opts.unshift({id:value,label:value+" (current)"});
+  sel.innerHTML=opts.map(m=>`<option value="${esc(m.id)}">${esc(m.label&&m.label!==m.id?m.label+" · "+m.id:m.id)}</option>`).join("");
+  if(value) sel.value=value;
+}
+async function putServerAi(body){ const r=await fetch("api/settings/ai",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!r.ok) throw {code:"upstream_error",message:"Couldn't save settings on your server."}; SERVER_AI=await r.json(); if(body.provider||body.geminiKey||body.anthropicKey) await loadServerModels(); }
 function applyProvider(){
   if(SERVER){
     sample = serverAiReady() ? serverSample : null;
@@ -632,10 +647,16 @@ function renderAiBox(){
     $("gemKey").parentNode.firstChild.textContent = prov==="anthropic"?"Anthropic API key":"Gemini API key";
     $("gemKey").placeholder = c.hasKey ? `Saved (${c.keyHint||"hidden"}). Paste a new key to replace it.` : (prov==="anthropic"?"Paste your key from console.anthropic.com":"Paste your key from Google AI Studio");
     if(c.keyFromEnv) $("gemKey").placeholder="Set by the container's environment variable.";
-    if(document.activeElement!==$("gemModel")) $("gemModel").value=c.model||"";
-    if(document.activeElement!==$("gemFast")) $("gemFast").value=c.fast||"";
+    $("gemModelInputs").hidden=true; $("srvModels").hidden=false; $("autoFbRow").hidden=false;
+    const ml=((SERVER_MODELS[prov]||{}).models)||[];
+    if(document.activeElement!==$("gemModelSel")) fillModelSelect($("gemModelSel"), ml, c.model);
+    if(document.activeElement!==$("gemFastSel")) fillModelSelect($("gemFastSel"), ml, c.fast);
+    $("autoFb").checked = !SERVER_AI || SERVER_AI.autoFallback!==false;
     const link=$("gemTest").nextElementSibling; if(link){ link.href = prov==="anthropic"?"https://console.anthropic.com/settings/keys":"https://aistudio.google.com/apikey"; link.textContent = prov==="anthropic"?"Get an API key":"Get a free key"; }
-    if(!$("gemNote").dataset.keep) $("gemNote").textContent = (c.hasKey?`Using ${prov==="anthropic"?"Claude":"Gemini"}: ${c.model} (fast: ${c.fast}). `:"")+"Keys are stored on your server only; this page never sees them again after you save.";
+    if(!$("gemNote").dataset.keep){
+      const last = LAST_AI && LAST_AI.skipped.length ? ` Last answer came from ${LAST_AI.model} because ${LAST_AI.skipped.join(", ")} ${LAST_AI.skipped.length>1?"were":"was"} busy.` : "";
+      $("gemNote").textContent = (c.hasKey?`Using ${prov==="anthropic"?"Claude":"Gemini"}: ${c.model} (fast: ${c.fast}).${last} `:"")+"Keys are stored on your server only; this page never sees them again after you save.";
+    }
     return;
   }
   const c=aiCfg(); const shown = inClaude() ? (c.provider==="gemini"?"gemini":"claude") : (c.provider==="claude"&&claudeSample?"claude":"gemini");
@@ -654,16 +675,17 @@ async function testServerAi(){
   const prov=serverProvider(); const note=$("gemNote"); note.dataset.keep="1";
   const body={provider:prov}; const key=$("gemKey").value.trim();
   if(key) body[prov==="anthropic"?"anthropicKey":"geminiKey"]=key;
-  const m=$("gemModel").value.trim(), f=$("gemFast").value.trim();
+  const m=($("gemModelSel").value||"").trim(), f=($("gemFastSel").value||"").trim(); body.autoFallback=$("autoFb").checked;
   if(m) body[prov==="anthropic"?"anthropicModel":"geminiModel"]=m;
   if(f) body[prov==="anthropic"?"anthropicFast":"geminiFast"]=f;
   note.innerHTML='<span class="dot"></span> Saving and testing…';
   try{
     await putServerAi(body); $("gemKey").value="";
     if(!serverAiReady()){ note.textContent="Saved. Paste an API key to turn on recommendations."; delete note.dataset.keep; applyProvider(); return; }
-    const a=await serverCall('Reply with only this JSON: {"ok":true}',{},true); const b=await serverCall('Reply with only this JSON: {"ok":true}',{modelTier:"quick"},true);
+    LAST_AI=null; const a=await serverCall('Reply with only this JSON: {"ok":true}',{},true); const mainUsed=LAST_AI; const b=await serverCall('Reply with only this JSON: {"ok":true}',{modelTier:"quick"},true); LAST_AI=mainUsed||LAST_AI;
     if(!/ok/.test(a.text)||!/ok/.test(b.text)) throw {code:"upstream_error",message:"The AI answered, but not as expected. Try again."};
-    note.textContent=`Connected. Recommendations now use ${SERVER_AI[prov].model} (and ${SERVER_AI[prov].fast} for quick tasks).`;
+    const used=LAST_AI&&LAST_AI.model, want=SERVER_AI[prov].fast;
+    note.textContent = LAST_AI&&LAST_AI.skipped.length ? `Connected, but ${LAST_AI.skipped.join(" and ")} ${LAST_AI.skipped.length>1?"are":"is"} busy right now, so it answered with ${used}. Recommendations will use your main model when it's free and fall back automatically when it isn't.` : `Connected. Recommendations use ${SERVER_AI[prov].model} (and ${want} for quick tasks).`;
   }catch(e){ note.textContent=errMsg(e); }
   applyProvider(); setTimeout(()=>{ delete note.dataset.keep; },100);
 }
@@ -1800,6 +1822,8 @@ $("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.
 // ---------- AI engine events ----------
 document.querySelectorAll("[data-ai]").forEach(b=>b.addEventListener("click",async()=>{ if(SERVER){ try{ await putServerAi({provider:b.dataset.ai==="claude"?"anthropic":"gemini"}); }catch(e){ toast(errMsg(e)); } applyProvider(); return; } const c=aiCfg(); c.provider=b.dataset.ai; saveAiCfg(c); applyProvider(); }));
 $("gemTest").addEventListener("click",testGemini);
+async function saveModelChoice(){ if(!SERVER) return; const prov=serverProvider(); const b={autoFallback:$("autoFb").checked}; b[prov==="anthropic"?"anthropicModel":"geminiModel"]=$("gemModelSel").value; b[prov==="anthropic"?"anthropicFast":"geminiFast"]=$("gemFastSel").value; try{ await putServerAi(b); toast("Saved. "+(b.autoFallback?"Busy models will fall back automatically.":"Automatic fallback is off.")); }catch(e){ toast(errMsg(e)); } applyProvider(); }
+["gemModelSel","gemFastSel","autoFb"].forEach(id=>$(id).addEventListener("change",saveModelChoice));
 $("gemKey").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); testGemini(); } });
 
 // ---------- v6 events ----------

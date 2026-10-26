@@ -215,7 +215,9 @@
     <div id="aiGem" style="display:grid;gap:8px" hidden>
       <div class="warnbox small" id="gemInClaude" hidden>This copy runs inside Claude, which blocks connections to outside services, so Gemini can't run here. It switches on automatically in your self-hosted version.</div>
       <label class="f">Gemini API key<input id="gemKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key from Google AI Studio"></label>
-      <div class="two"><label class="f">Main model<input id="gemModel" type="text" spellcheck="false"></label><label class="f">Fast model<input id="gemFast" type="text" spellcheck="false"></label></div>
+      <div class="two" id="gemModelInputs"><label class="f">Main model<input id="gemModel" type="text" spellcheck="false"></label><label class="f">Fast model<input id="gemFast" type="text" spellcheck="false"></label></div>
+      <div class="two" id="srvModels" hidden><label class="f">Main model<select id="gemModelSel" aria-describedby="gemNote"></select></label><label class="f">Fast model (quick tasks)<select id="gemFastSel"></select></label></div>
+      <label class="toggle" id="autoFbRow" hidden><input type="checkbox" id="autoFb" checked> If a model is busy, try the next one automatically</label>
       <div class="row"><button class="btn small" id="gemTest" type="button">Save and test</button><a class="small" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get a free key</a></div>
       <span class="note" id="gemNote">Your key is saved only in this browser. It never goes into your saved builds, collection or exports.</span>
     </div>

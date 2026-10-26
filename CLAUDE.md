@@ -40,6 +40,7 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 | `GET /api/proxy?url=` | allowed hosts only; `X-Cache: HIT/MISS/STALE` |
 | `GET/PUT /api/settings/ai` | keys are write-only; GET returns `hasKey` + `keyHint` |
 | `POST /api/ai` `{prompt, tier, json}` | streams text; a late error is appended as `\u0000ERR{json}` |
+| `GET /api/ai/models?provider=` | live model list for the dropdowns (falls back to `ORDER` in ai.js) |
 | `GET/PUT /api/collection` | `{items:[[name,qty,addedMs]]}` (PUT replaces all) |
 | `GET /api/builds`, `GET/PUT/DELETE /api/builds/:name` | saved builds |
 | `GET/PUT /api/state` | current working build, so it follows you across devices |
@@ -51,3 +52,4 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 - Bracket rules live in `BRACKETS`; the Game Changers list in `GAME_CHANGERS` (keep in sync with Scryfall `is:gamechanger`; live data also sets `c.gcLive`).
 - Run `npm test` before pushing; CI blocks the image if tests fail.
 - Default AI models: `server/ai.js` `DEFAULTS` and `GEM_DEFAULT` in app.js. Check current model IDs before changing.
+- Model fallback: `runAi` tries the chosen model, then `ORDER[provider]` (lighter first for quick tasks) on overloaded/rate-limit/timeout/unknown-model errors, only before any text streamed. `X-AI-Model` / `X-AI-Skipped` headers tell the page which model answered. Toggle: `autoFallback` setting.
