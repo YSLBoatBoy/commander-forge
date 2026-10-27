@@ -43,7 +43,7 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 | `GET /api/ai/models?provider=` | live model list for the dropdowns (falls back to `ORDER` in ai.js) |
 | `GET/PUT /api/collection` | `{items:[[name,qty,addedMs]]}` (PUT replaces all) |
 | `GET /api/builds`, `GET/PUT/DELETE /api/builds/:name` | saved builds |
-| `GET/PUT /api/state` | current working build, so it follows you across devices |
+| `GET/PUT /api/state` | unused since 1.1 (the working deck is no longer kept between visits); kept for compatibility |
 
 ## Conventions
 
@@ -53,3 +53,4 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 - Run `npm test` before pushing; CI blocks the image if tests fail.
 - Default AI models: `server/ai.js` `DEFAULTS` and `GEM_DEFAULT` in app.js. Check current model IDs before changing.
 - Model fallback: `runAi` tries the chosen model, then `ORDER[provider]` (lighter first for quick tasks) on overloaded/rate-limit/timeout/unknown-model errors, only before any text streamed. `X-AI-Model` / `X-AI-Skipped` headers tell the page which model answered. Toggle: `autoFallback` setting.
+- Working deck: every visit starts empty (`loadInitial`). Nothing is kept until the user clicks **Save deck** (step 8, `saveDeck`), which writes to Saved builds. `save()` only marks `DIRTY`; a `beforeunload` prompt guards unsaved changes. Bracket, budget and export format persist in `localStorage cforge.prefs`.

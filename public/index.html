@@ -151,6 +151,16 @@
     </div>
     <div class="hand" id="hand"></div>
   </section>
+
+  <section class="step" aria-labelledby="h8" id="saveSec">
+    <div class="step-h"><span class="num">8</span><h2 id="h8">Save or discard</h2><span class="hint" id="saveHint">This deck clears when you leave the site unless you save it.</span></div>
+    <div class="row">
+      <input id="deckName" type="text" class="grow" placeholder="Deck name" aria-label="Deck name" maxlength="120">
+      <button class="btn primary" id="saveDeck" type="button">Save deck</button>
+      <button class="btn" id="discardDeck" type="button">Discard and start over</button>
+    </div>
+    <span class="note" id="saveNote"></span>
+  </section>
 </main>
 
 <aside id="deck">
@@ -158,6 +168,7 @@
     <span class="eyebrow">Deck box</span>
     <div class="big" id="count">0<small> / 99</small></div>
     <div id="countNote" class="note"></div>
+    <a class="note" id="dirtyNote" href="#saveSec" hidden>Not saved yet. Save it at the bottom of the page.</a>
     <div class="ledger" id="ledger"></div>
   </div>
   <div class="box">
@@ -225,7 +236,7 @@
   <div class="box">
     <h2>Saved builds</h2>
     <div class="saved" id="saved"></div>
-    <span class="note">Builds save automatically in this browser.</span>
+    <span class="note">Decks you save appear here. Click one to open it.</span>
   </div>
 </aside>
 </div>

@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -29,10 +29,10 @@ function loadPage({ storage = {} } = {}) {
   const store = { ...storage };
   const ctx = {
     document: { getElementById: el, querySelectorAll: () => [], querySelector: () => null, head: { appendChild() {} }, createElement: () => el("x" + Math.random()) },
-    localStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+    localStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } },
     sessionStorage: { getItem: () => null, setItem() {} },
     location: { hash: "", protocol: "file:" },
-    window: {}, navigator: {},
+    window: { addEventListener() {}, scrollTo() {} }, navigator: {},
     fetch: () => Promise.reject(new Error("offline")),
     requestAnimationFrame: (f) => f(), setTimeout: () => 0, clearTimeout: () => {},
     console, Math, Date, JSON, Promise, URL, TextDecoder, TextEncoder, Blob: class {},
@@ -44,6 +44,7 @@ function loadPage({ storage = {} } = {}) {
 
 test("example deck is exactly 100 cards and exports for Archidekt", () => {
   const { T } = loadPage();
+  T.loadExample();
   assert.equal(T.deckCount(), T.mainSize());
   const lines = T.exportText().split("\n");
   assert.equal(lines.reduce((a, l) => a + (parseInt(l) || 0), 0), 100);
@@ -69,6 +70,7 @@ test("reads collection spreadsheets from common apps", () => {
 
 test("owned cards are free toward the budget", () => {
   const { T } = loadPage();
+  T.loadExample();
   const before = T.spent();
   T.collAddMany([{ n: "Rhystic Study", q: 1 }, { n: "Scroll Rack", q: 1 }], "add");
   assert.ok(T.owned("rhystic study"));
@@ -77,6 +79,7 @@ test("owned cards are free toward the budget", () => {
 
 test("bracket 2 removes Game Changers", () => {
   const { T } = loadPage();
+  T.loadExample();
   T.S.bracket = 2;
   const removed = T.enforceBracket();
   assert.ok(removed > 0);
@@ -85,6 +88,7 @@ test("bracket 2 removes Game Changers", () => {
 
 test("playtest runs and keeps the deck at 99 after applying fixes", () => {
   const { T } = loadPage();
+  T.loadExample();
   T.runPlaytest();
   assert.ok(T.PT.N > 0 && T.PT.mull >= 0 && T.PT.mull <= 1);
   T.S.landTarget = 31;
@@ -143,4 +147,31 @@ test("a useless AI answer is reported instead of failing silently", async () => 
   T.setSample(fake);
   await assert.rejects(T.describePlans(), (e) => e.code === "no_plans");
   assert.equal(T.S.plansFailed, true);
+});
+
+test("every visit starts with an empty deck; save keeps it, discard clears it", () => {
+  const first = loadPage({ storage: { "cforge.current": JSON.stringify({ cards: [{ n: "Old card" }], commanders: [{ name: "Old" }] }) } });
+  assert.equal(first.T.S.cards.length, 0);
+  assert.equal(first.T.S.commanders.length, 0);
+  assert.equal(first.store["cforge.current"], undefined);
+  assert.equal(first.T.deckCount(), 0);
+
+  const { T, els, store } = loadPage();
+  T.loadExample();
+  T.S.example = false;
+  T.save();
+  assert.equal(T.DIRTY, true);
+  els.deckName.value = "My Yennett";
+  T.saveDeck();
+  assert.equal(T.DIRTY, false);
+  assert.ok(JSON.parse(store["cforge.builds"])["My Yennett"].state.cards.length > 50);
+  T.save();
+  assert.equal(T.DIRTY, true);
+  T.discardDeck();                       // first click only asks for confirmation
+  assert.equal(T.S.cards.length > 0, true);
+  els.discardDeck.dataset.confirm = "1";
+  T.discardDeck();
+  assert.equal(T.S.cards.length, 0);
+  assert.equal(T.DIRTY, false);
+  assert.ok(JSON.parse(store["cforge.builds"])["My Yennett"], "saved deck survives a discard");
 });

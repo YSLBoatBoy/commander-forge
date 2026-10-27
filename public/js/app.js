@@ -129,6 +129,8 @@ const EXAMPLE = {
 let S, sample=null, downloads=null, mcp=null, LIVE=false, running=[], saveTimer=null, uid=1;
 // SERVER is true when the page is served by the self-hosted Commander Forge server (see /server).
 let SERVER=false, SERVER_AI=null, BUILDS=null, SERVER_MODELS={}, LAST_AI=null;
+// DIRTY: the working deck has changes that aren't in Saved builds. The working deck isn't kept between visits.
+let DIRTY=false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = v => { v=Number(v)||0; return v>=1000? "$"+Math.round(v).toLocaleString() : "$"+(v>=100?Math.round(v):v.toFixed(2)); };
@@ -255,6 +257,7 @@ function mainSize(){ return 100 - Math.max(1,S.commanders.length||1); }
 function nonbasicSel(){ return S.cards.filter(c=>c.sel && c.c==="land").length; }
 function basicsList(){
   if(S.basics) return Object.entries(S.basics).filter(([,k])=>k>0);
+  if(!S.cards.length) return [];   // an empty deck has no basics yet
   const n=Math.max(0, S.landTarget - nonbasicSel()), cols=S.colors;
   if (!cols.length) return n?[["Wastes",n]]:[];
   const w=(S.plan&&S.plan.weights)||{}; let tot=0; const ws=cols.map(c=>{const v=Number(w[c])||1; tot+=v; return v;});
@@ -415,7 +418,7 @@ function cardHTML(c){
   </div>`;
 }
 function renderPool(){
-  if(!S.cards.length){ $("pool").innerHTML=`<div class="empty">${S.mode==="import"?"Import a deck to see it here, sorted by role.":"Your recommendations will appear here, grouped by role."}</div>`; return; }
+  if(!S.cards.length){ $("pool").innerHTML=`<div class="empty">${S.mode==="import"?"Import a deck to see it here, sorted by role.":"Your recommendations will appear here, grouped by role."}${S.mode==="new"&&!S.commanders.length?' <button type="button" class="btn small ghost" id="loadExample">See an example deck</button>':""}</div>`; return; }
   let html="";
   const swaps=S.cards.filter(c=>c.swapOut);
   if(swaps.length){
@@ -531,15 +534,49 @@ function renderLive(){
   $("liveNote").hidden = LIVE || mcp===undefined;
   $("refreshBtn").hidden = !LIVE;
 }
-function render(){ renderMode(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); }
+function render(){ renderMode(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); renderSaveBar(); }
 function save(){
-  clearTimeout(saveTimer);
-  saveTimer=setTimeout(()=>{ try{
-    localStorage.setItem("cforge.current", JSON.stringify(S));
-    if(SERVER) fetch("api/state",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:S})}).catch(()=>{});
-    if(S.commanders.length && !S.example){ const k=S.commanders.map(c=>c.name).join(" + ")+(S.mode==="import"?" (imported)":""); buildsPut(k,{t:Date.now(),count:deckCount()+"/"+mainSize(),state:JSON.parse(JSON.stringify(S))}); renderSaved(); }
-  }catch(e){} },400);
+  if(S.example){ S.example=false; $("exampleBanner").hidden=true; }   // once you change the example, it's your deck
+  if(S.commanders.length || S.cards.length) DIRTY=true;
+  renderSaveBar();
 }
+function defaultDeckName(){ return S.savedName || (S.commanders.length ? S.commanders.map(c=>c.name.split(",")[0]).join(" + ")+(S.mode==="import"?" (imported)":"") : ""); }
+function renderSaveBar(){
+  const has = !S.example && (S.commanders.length || S.cards.length);
+  if($("saveSec")) $("saveSec").hidden = !has;
+  if($("dirtyNote")) $("dirtyNote").hidden = !(has && DIRTY);
+  if(!has || !$("deckName")) return;
+  const inp=$("deckName");
+  if(document.activeElement!==inp && (!inp.value || inp.dataset.auto===inp.value)){ inp.value=defaultDeckName(); inp.dataset.auto=inp.value; }
+  const name=$("deckName").value.trim(); const exists=!!buildsAll()[name];
+  $("saveDeck").textContent = exists ? (name===S.savedName?"Update saved deck":"Replace saved deck") : "Save deck";
+  $("saveHint").textContent = DIRTY ? (S.savedName?`Changes since you last saved “${S.savedName}” are lost when you leave unless you save them.`:"This deck clears when you leave the site unless you save it.") : (S.savedName?`Saved as “${S.savedName}”. No unsaved changes.`:"This deck clears when you leave the site unless you save it.");
+}
+function saveDeck(){
+  const name=($("deckName").value||"").trim()||defaultDeckName()||"Untitled deck";
+  const b=$("saveDeck");
+  if(buildsAll()[name] && name!==S.savedName && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to replace “${name}”`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; renderSaveBar(); } },4000); return; }
+  b.dataset.confirm="";
+  S.savedName=name; $("deckName").value=name;
+  buildsPut(name,{t:Date.now(),count:deckCount()+"/"+mainSize(),state:JSON.parse(JSON.stringify(S))});
+  DIRTY=false; renderSaved(); renderSaveBar();
+  $("saveNote").textContent=`Saved. Open it any time from Saved builds${SERVER?" on any device":""}.`;
+  toast(`Saved “${name}”.`);
+}
+function newDeck(){
+  const keep={bracket:S.bracket,budget:S.mode==="import"?500:S.budget,fmt:S.fmt};
+  S=fresh("new"); Object.assign(S,keep);
+  COMBOS=null; PT=null; HAND=null; DIRTY=false;
+  $("deckName").value=""; $("saveNote").textContent=""; $("cmdStatus").innerHTML=""; $("buildStatus").innerHTML=""; $("importStatus").innerHTML="";
+  render(); renderCombos(); renderPlaytest(); renderHand(); renderSaveBar();
+}
+function discardDeck(){
+  const b=$("discardDeck");
+  if(DIRTY && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="Click again to discard your changes"; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Discard and start over"; } },4000); return; }
+  b.dataset.confirm=""; b.textContent="Discard and start over";
+  newDeck(); window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"}); toast("Started a new deck.");
+}
+function loadExample(){ S=JSON.parse(JSON.stringify(EXAMPLE)); S.cards.forEach(normCard); COMBOS=null; PT=null; HAND=null; DIRTY=false; if($("deckName")) $("deckName").value=""; render(); renderSaveBar(); }
 
 // ================= Claude prompts =================
 const ERR = {not_granted:"Claude access wasn't allowed for this page. Reload and choose Allow to get recommendations.",sampling_disabled:"Claude isn't available on this account.",rate_limited:"Too many requests right now. Wait a minute and try again.",session_expired:"Your session expired. Sign in again, then retry.",invalid_json:"Claude's answer couldn't be read. Try again.",refused:"Claude declined this request. Try rewording it.",upstream_error:"The connection dropped. Try again.",prompt_too_large:"Too much text in the request. Shorten your notes."};
@@ -1782,7 +1819,7 @@ document.querySelectorAll("[data-fmt]").forEach(b=>b.addEventListener("click",()
 $("copyBtn").addEventListener("click",()=>{ const t=exportText(); const ta=$("exportText"); navigator.clipboard.writeText(t).then(()=>toast("Copied. Paste it into the import box."),()=>{ ta.focus(); ta.select(); toast("Press Ctrl/Cmd+C to copy the selected list."); }); });
 $("dlBtn").addEventListener("click",async()=>{ try{ await downloads.save({filename:(S.commanders[0]?S.commanders[0].name.split(",")[0]:"deck").replace(/[^\w ]+/g,"").trim()+" - "+(S.fmt==="moxfield"?"moxfield":"archidekt")+".txt",data:exportText()}); }catch(e){} });
 $("saved").addEventListener("click",async e=>{
-  const l=e.target.closest("[data-load]"); if(l){ const st=await buildState(l.dataset.load); if(st){ S=st; S.cards.forEach(normCard); COMBOS=null; PT=null; HAND=null; render(); renderCombos(); renderPlaytest(); renderHand(); save(); toast("Loaded "+l.dataset.load+"."); } else toast("Couldn't load that build."); return; }
+  const l=e.target.closest("[data-load]"); if(l){ const st=await buildState(l.dataset.load); if(st){ if(DIRTY && l.dataset.confirm!=="1"){ l.dataset.confirm="1"; const t=l.textContent; l.textContent="Unsaved changes will be lost. Click again to open "+t; setTimeout(()=>{ if(l.isConnected){ l.dataset.confirm=""; l.textContent=t; } },4000); return; } S=st; S.cards.forEach(normCard); S.savedName=S.savedName||l.dataset.load; S.example=false; COMBOS=null; PT=null; HAND=null; DIRTY=false; $("deckName").value=S.savedName; $("saveNote").textContent=""; render(); renderCombos(); renderPlaytest(); renderHand(); renderSaveBar(); window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"}); toast("Opened "+l.dataset.load+"."); } else toast("Couldn't load that build."); return; }
   const d=e.target.closest("[data-del]"); if(d){ if(d.dataset.confirm!=="1"){ d.dataset.confirm="1"; d.textContent="Confirm"; setTimeout(()=>{ if(d.isConnected){d.dataset.confirm="";d.textContent="Delete";} },3000); return; } buildsDel(d.dataset.del); renderSaved(); }
 });
 
@@ -1842,6 +1879,17 @@ $("shopCopy").addEventListener("click",()=>{ const t=shopList().map(c=>"1 "+c.n)
 $("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const undo=collAddMany(list,"add"); toast(`Added ${list.length} cards to your collection.`,{label:"Undo",fn:undo}); });
 $("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); const undo=collAddMany(aggregate(list),"add"); toast(`Added ${list.length} cards from this deck to your collection.`,{label:"Undo",fn:undo}); });
 
+// ---------- save / discard ----------
+$("saveDeck").addEventListener("click",saveDeck);
+$("discardDeck").addEventListener("click",discardDeck);
+$("deckName").addEventListener("input",()=>{ $("saveDeck").dataset.confirm=""; renderSaveBar(); });
+$("deckName").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); saveDeck(); } });
+$("pool").addEventListener("click",e=>{ if(e.target.id==="loadExample") loadExample(); });
+window.addEventListener("beforeunload",e=>{ if(DIRTY && !inClaude()){ e.preventDefault(); e.returnValue=""; } });
+["brackets","presets"].forEach(id=>$(id).addEventListener("click",()=>setTimeout(savePrefs,0)));
+$("budget").addEventListener("input",()=>setTimeout(savePrefs,0));
+document.querySelectorAll("[data-fmt]").forEach(b=>b.addEventListener("click",()=>setTimeout(savePrefs,0)));
+
 // ---------- AI engine events ----------
 document.querySelectorAll("[data-ai]").forEach(b=>b.addEventListener("click",async()=>{ if(SERVER){ try{ await putServerAi({provider:b.dataset.ai==="claude"?"anthropic":"gemini"}); }catch(e){ toast(errMsg(e)); } applyProvider(); return; } const c=aiCfg(); c.provider=b.dataset.ai; saveAiCfg(c); applyProvider(); }));
 $("gemTest").addEventListener("click",testGemini);
@@ -1866,12 +1914,12 @@ $("drawOne").addEventListener("click",()=>{ if(!HAND||!HAND.lib.length) return; 
 
 // ================= boot =================
 function loadInitial(){
-  let st=null;
-  try{ const raw=localStorage.getItem("cforge.current"); if(raw) st=JSON.parse(raw);}catch(e){}
-  S = st || JSON.parse(JSON.stringify(EXAMPLE));
-  if(!S.mode) S.mode="new"; if(!S.fmt) S.fmt="archidekt"; if(S.basics===undefined) S.basics=null;
-  S.cards.forEach(normCard);
+  // Every visit starts with a fresh deck. Keep only the last bracket, budget and export format.
+  let prefs={};
+  try{ prefs=JSON.parse(localStorage.getItem("cforge.prefs")||"{}")||{}; localStorage.removeItem("cforge.current"); }catch(e){}
+  S=fresh("new"); S.bracket=Number(prefs.bracket)||3; S.budget=prefs.budget!=null?Number(prefs.budget):500; S.fmt=prefs.fmt||"archidekt";
 }
+function savePrefs(){ try{ localStorage.setItem("cforge.prefs",JSON.stringify({bracket:S.bracket,budget:S.budget,fmt:S.fmt})); }catch(e){} }
 loadCollLocal(); loadInitial(); mcp=undefined; render(); renderCollection(); renderPrecons(); renderCombos();
 preconsReady.then(()=>{ renderPrecons(); renderCommander(); });
 try{ const v=(location.hash||"").replace("#","")||sessionStorage.getItem("cforge.view"); if(v==="collection") showView("collection"); }catch(e){}
@@ -1894,7 +1942,6 @@ if (window.claude && window.claude.use){
     $("dlBtn").hidden=false; $("collDl").hidden=false;
     await refreshServerAi();
     try{ const b=await fetch("api/builds").then(r=>r.json()); BUILDS={}; (b.builds||[]).forEach(x=>{ BUILDS[x.name]={t:x.t,count:x.count}; }); }catch(e){}
-    try{ if(!localStorage.getItem("cforge.current")){ const st=await fetch("api/state").then(r=>r.json()); if(st&&st.state&&st.state.cards){ S=st.state; S.cards.forEach(normCard); } } }catch(e){}
     await initCollectionStore();
   }).catch(()=>setSync("local")).finally(()=>{ renderLive(); applyProvider(); render(); renderSaved(); renderCombos(); });
 }
