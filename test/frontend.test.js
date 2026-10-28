@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -174,4 +174,18 @@ test("every visit starts with an empty deck; save keeps it, discard clears it", 
   assert.equal(T.S.cards.length, 0);
   assert.equal(T.DIRTY, false);
   assert.ok(JSON.parse(store["cforge.builds"])["My Yennett"], "saved deck survives a discard");
+});
+
+test("replace and delete-all actually change the saved collection, and undo restores it", () => {
+  const { T, store } = loadPage();
+  T.collAddMany([{ n: "Sol Ring", q: 2 }, { n: "Island", q: 10 }], "add");
+  assert.equal(T.COLL.size, 2);
+  const undo = T.collAddMany([{ n: "Opt", q: 1 }], "replace");
+  assert.equal(T.COLL.size, 1);
+  assert.deepEqual(plain(JSON.parse(store["cforge.collection"]).map((r) => r[0])), ["Opt"]);
+  undo();
+  assert.equal(T.COLL.size, 2);
+  T.clearCollection();
+  assert.equal(T.COLL.size, 0);
+  assert.equal(JSON.parse(store["cforge.collection"]).length, 0);
 });

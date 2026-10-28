@@ -1144,7 +1144,7 @@ function cleanName(n){
 function collMutate(fn, undoLabel){
   const before = undoLabel ? new Map([...COLL].map(([k,v])=>[k,Object.assign({},v)])) : null;
   const touched=fn();
-  (touched||[]).forEach(k=>dirty.add(bucket(k)));
+  if(Array.isArray(touched)) touched.forEach(k=>dirty.add(bucket(k)));
   if(touched==="all"){ "abcdefghijklmnopqrstuvwxyz_".split("").forEach(b=>dirty.add(b)); }
   reindexColl(); saveCollLocal(); scheduleFlush(); collLimit=Math.max(collLimit,150);
   renderCollection(); renderPool(); renderDeck(); renderOwnedToggles();
@@ -1161,6 +1161,7 @@ function collAddMany(list, mode){ // list: [{n,q}] ; mode: add | replace
 function collSet(name,q){
   return collMutate(()=>{ const k=key(name); const cur=COLL.get(k); if(q<=0){ COLL.delete(k); } else if(cur){ cur.q=q; } else COLL.set(k,{n:name,q,t:Date.now()}); return [k]; }, q<=0);
 }
+function clearCollection(){ return collMutate(()=>{ COLL.clear(); return "all"; },true); }
 function saveCollLocal(){ try{ localStorage.setItem("cforge.collection", JSON.stringify([...COLL.values()].map(v=>[v.n,v.q,v.t||0]))); }catch(e){} }
 function loadCollLocal(){ try{ const a=JSON.parse(localStorage.getItem("cforge.collection")||"[]"); a.forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); }catch(e){} reindexColl(); }
 function setSync(st,err){ collSync=st; collErr=err||""; renderSyncChip(); }
@@ -1190,9 +1191,8 @@ async function initCollectionStore(){
   if(SERVER){
     try{
       const j=await fetch("api/collection").then(r=>r.json());
-      if(j.items&&j.items.length){ COLL.clear(); j.items.forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); reindexColl(); saveCollLocal(); setSync("cloud"); }
-      else if(COLL.size){ dirty.add("_"); await flushColl(); }
-      else setSync("cloud");
+      // The server's list always wins, so cards deleted on one device don't come back from another browser's copy.
+      COLL.clear(); (j.items||[]).forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); reindexColl(); saveCollLocal(); setSync("cloud");
     }catch(e){ setSync("error","Couldn't reach your server."); }
     renderCollection(); renderPool(); renderDeck(); renderOwnedToggles(); return;
   }
@@ -1869,7 +1869,7 @@ $("collClear").addEventListener("click",e=>{
   if(!COLL.size) return;
   const b=e.target; if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to delete all ${COLL.size.toLocaleString()} cards`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete all"; } },4000); return; }
   b.dataset.confirm=""; b.textContent="Delete all";
-  const undo=collMutate(()=>{ COLL.clear(); return "all"; },true); toast("Deleted your collection.",{label:"Undo",fn:undo});
+  const undo=clearCollection(); toast("Deleted your collection.",{label:"Undo",fn:undo});
 });
 $("preferOwned").addEventListener("change",e=>{ S.preferOwned=e.target.checked; save(); });
 $("ownedFree").addEventListener("change",e=>{ S.ownedFree=e.target.checked; renderPool(); renderDeck(); save(); });
