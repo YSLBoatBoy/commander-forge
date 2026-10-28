@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export function openDb(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -37,6 +37,10 @@ export function openDb(dataDir) {
       fetched INTEGER NOT NULL
     );
   `);
+  // v2: cards can live in a named deck ("loc"); "" is the general collection.
+  if (!db.prepare("PRAGMA table_info(collection)").all().some((c) => c.name === "loc")) {
+    db.exec("ALTER TABLE collection ADD COLUMN loc TEXT NOT NULL DEFAULT ''");
+  }
   const ver = db.prepare("SELECT value FROM kv WHERE key='schema_version'").get();
   if (!ver) db.prepare("INSERT INTO kv(key,value,updated) VALUES('schema_version',?,?)").run(String(SCHEMA_VERSION), Date.now());
   return wrap(db, file);
@@ -47,9 +51,9 @@ function wrap(db, file) {
     kvGet: db.prepare("SELECT value FROM kv WHERE key=?"),
     kvSet: db.prepare("INSERT INTO kv(key,value,updated) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated"),
     kvDel: db.prepare("DELETE FROM kv WHERE key=?"),
-    collAll: db.prepare("SELECT name, qty, added FROM collection ORDER BY name COLLATE NOCASE"),
+    collAll: db.prepare("SELECT name, qty, added, loc FROM collection ORDER BY loc COLLATE NOCASE, name COLLATE NOCASE"),
     collClear: db.prepare("DELETE FROM collection"),
-    collIns: db.prepare("INSERT INTO collection(k,name,qty,added) VALUES(?,?,?,?) ON CONFLICT(k) DO UPDATE SET name=excluded.name, qty=excluded.qty, added=excluded.added"),
+    collIns: db.prepare("INSERT INTO collection(k,name,qty,added,loc) VALUES(?,?,?,?,?) ON CONFLICT(k) DO UPDATE SET name=excluded.name, qty=excluded.qty+collection.qty, added=excluded.added, loc=excluded.loc"),
     buildsAll: db.prepare("SELECT name, count, updated FROM builds ORDER BY updated DESC"),
     buildGet: db.prepare("SELECT state FROM builds WHERE name=?"),
     buildPut: db.prepare("INSERT INTO builds(name,state,count,updated) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET state=excluded.state, count=excluded.count, updated=excluded.updated"),
@@ -65,7 +69,7 @@ function wrap(db, file) {
     kvGet(key, fallback = null) { const r = q.kvGet.get(key); if (!r) return fallback; try { return JSON.parse(r.value); } catch { return fallback; } },
     kvSet(key, value) { q.kvSet.run(key, JSON.stringify(value), Date.now()); },
     kvDel(key) { q.kvDel.run(key); },
-    collectionAll() { return q.collAll.all().map((r) => [r.name, r.qty, r.added]); },
+    collectionAll() { return q.collAll.all().map((r) => [r.name, r.qty, r.added, r.loc || ""]); },
     collectionReplace(items) {
       return tx(() => {
         q.collClear.run();
@@ -74,7 +78,9 @@ function wrap(db, file) {
           const name = String(it[0] || "").trim().slice(0, 200);
           const qty = Math.max(1, Math.min(9999, Math.round(Number(it[1]) || 1)));
           if (!name) continue;
-          q.collIns.run(name.toLowerCase().replace(/\s+/g, " "), name, qty, Math.round(Number(it[2]) || 0));
+          const loc = String(it[3] || "").trim().slice(0, 80);
+          const k = (loc ? loc.toLowerCase() + "\u241f" : "") + name.toLowerCase().replace(/\s+/g, " ");
+          q.collIns.run(k, name, qty, Math.round(Number(it[2]) || 0), loc);
           n++;
         }
         return n;

@@ -395,7 +395,7 @@ const priceTxt = (usd,live) => usd==null ? (live?"no price":"…") : (live?money
 function cardHTML(c){
   const br=blockReason(c), lim=gcLimitHit(c);
   const tags=[];
-  const ow=owned(c.n); if(ow) tags.push(`<span class="tag own">Owned${ow.q>1?" ×"+ow.q:""}</span>`);
+  const ow=owned(c.n); if(ow){ const wh=ownedWhere(ow); tags.push(`<span class="tag own" title="${esc(ow.locs.map(l=>l.q+" in "+(l.loc||"general collection")).join(", "))}">Owned${ow.q>1?" ×"+ow.q:""}${wh?" · "+esc(wh):""}</span>`); }
   if(c.swapOut) tags.push('<span class="tag new">Upgrade</span>');
   else if(c.o==="added") tags.push('<span class="tag new">Added</span>');
   if(c.f.includes("gc")) tags.push('<span class="tag gc">Game Changer</span>');
@@ -1130,13 +1130,25 @@ async function refreshPrices(){
 }
 
 // ================= collection =================
-const COLL=new Map();           // key(name) -> {n, q, t}
-let FRONT=new Map();
+// Each entry is one card in one place: your general collection (loc "") or a named deck.
+const COLL=new Map();           // ckey(name, loc) -> {n, q, t, loc}
+let BYNAME=new Map();           // key(name) and front face -> {n, q (every place), locs:[{loc,q}]}
+const LOCSEP="\u241f";
+function ckey(n,loc){ return (loc?fold(loc).trim()+LOCSEP:"")+key(n); }
 let cdb=null, cuid=null, collSync="loading", collErr="", flushing=false, flushT=null;
 const dirty=new Set();
 let collLimit=150, pendingUpload=null;
-function reindexColl(){ FRONT=new Map(); for(const [k,v] of COLL){ const f=k.split(" // ")[0]; if(f!==k && !FRONT.has(f)) FRONT.set(f,v); } }
-function owned(name){ if(!COLL.size||!name) return null; const k=key(name); return COLL.get(k)||COLL.get(k.split(" // ")[0])||FRONT.get(k)||null; }
+function reindexColl(){
+  BYNAME=new Map();
+  const add=(k,v)=>{ let e=BYNAME.get(k); if(!e){ e={n:v.n,q:0,locs:[]}; BYNAME.set(k,e); } e.q+=v.q; e.locs.push({loc:v.loc||"",q:v.q}); };
+  for(const v of COLL.values()){ const k=key(v.n); add(k,v); const f=k.split(" // ")[0]; if(f!==k) add(f,v); }
+}
+function owned(name){ if(!COLL.size||!name) return null; const k=key(name); return BYNAME.get(k)||BYNAME.get(k.split(" // ")[0])||null; }
+// "in Vivi Storm" / "also in Vivi Storm" when some copies sit in a deck.
+function ownedWhere(o){ if(!o) return ""; const decks=[...new Set(o.locs.filter(l=>l.loc).map(l=>l.loc))]; if(!decks.length) return ""; return (o.locs.some(l=>!l.loc)?"also in ":"in ")+decks.join(", "); }
+function decksList(){ const m=new Map(); for(const v of COLL.values()) if(v.loc){ const e=m.get(v.loc)||{name:v.loc,cards:0,copies:0}; e.cards++; e.copies+=v.q; m.set(v.loc,e); } return [...m.values()].sort((a,b)=>a.name.localeCompare(b.name)); }
+function uniqueCards(){ return new Set([...COLL.values()].map(v=>key(v.n))).size; }
+const locLabel = loc => loc ? `deck “${loc}”` : "your general collection";
 function bucket(k){ const ch=fold(k).charAt(0); return /[a-z]/.test(ch)?ch:"_"; }
 function cleanName(n){
   return String(n||"").replace(/\s+\([A-Za-z0-9]{2,8}\)(\s+[\w\-★†]+)?\s*$/,"").replace(/\s\*[A-Za-z]+\*$/,"").replace(/\s+/g," ").replace(/^["']|["']$/g,"").trim();
@@ -1150,28 +1162,34 @@ function collMutate(fn, undoLabel){
   renderCollection(); renderPool(); renderDeck(); renderOwnedToggles();
   if(before) return ()=>{ collMutate(()=>{ COLL.clear(); before.forEach((v,k)=>COLL.set(k,v)); return "all"; }); };
 }
-function collAddMany(list, mode){ // list: [{n,q}] ; mode: add | replace
+function collAddMany(list, mode, loc){ // list: [{n,q}]; mode: add | replace (replace only empties that place)
+  loc=String(loc||"").trim();
   return collMutate(()=>{
     const t=Date.now(); const touched=[];
-    if(mode==="replace"){ COLL.clear(); }
-    list.forEach(({n,q})=>{ const k=key(n); if(!k) return; const cur=COLL.get(k); if(cur){ cur.q+=q; cur.t=t; } else COLL.set(k,{n,q,t}); touched.push(k); });
+    if(mode==="replace"){ for(const [k,v] of [...COLL]) if((v.loc||"")===loc) COLL.delete(k); }
+    list.forEach(({n,q})=>{ const k=ckey(n,loc); if(!key(n)) return; const cur=COLL.get(k); if(cur){ cur.q+=q; cur.t=t; } else COLL.set(k,{n,q,t,loc}); touched.push(k); });
     return mode==="replace"?"all":touched;
   }, true);
 }
-function collSet(name,q){
-  return collMutate(()=>{ const k=key(name); const cur=COLL.get(k); if(q<=0){ COLL.delete(k); } else if(cur){ cur.q=q; } else COLL.set(k,{n:name,q,t:Date.now()}); return [k]; }, q<=0);
+function collSet(name,q,loc){
+  loc=String(loc||"").trim();
+  return collMutate(()=>{ const k=ckey(name,loc); const cur=COLL.get(k); if(q<=0){ COLL.delete(k); } else if(cur){ cur.q=q; } else COLL.set(k,{n:name,q,t:Date.now(),loc}); return [k]; }, q<=0);
 }
+function deleteLocation(loc){ return collMutate(()=>{ for(const [k,v] of [...COLL]) if((v.loc||"")===loc) COLL.delete(k); return "all"; },true); }
+function moveLocation(from,to){ return collMutate(()=>{ const t=Date.now(); for(const [k,v] of [...COLL]) if((v.loc||"")===from){ COLL.delete(k); const nk=ckey(v.n,to); const cur=COLL.get(nk); if(cur) cur.q+=v.q; else COLL.set(nk,{n:v.n,q:v.q,t,loc:to}); } return "all"; },true); }
 // "100 cards (82 different)" when copies and unique names differ, else "82 cards".
 function cardCount(list){ const copies=list.reduce((a,c)=>a+(Number(c.q)||1),0), uniq=list.length; return copies===uniq ? `${uniq.toLocaleString()} card${uniq===1?"":"s"}` : `${copies.toLocaleString()} cards (${uniq.toLocaleString()} different)`; }
 function clearCollection(){ return collMutate(()=>{ COLL.clear(); return "all"; },true); }
-function saveCollLocal(){ try{ localStorage.setItem("cforge.collection", JSON.stringify([...COLL.values()].map(v=>[v.n,v.q,v.t||0]))); }catch(e){} }
-function loadCollLocal(){ try{ const a=JSON.parse(localStorage.getItem("cforge.collection")||"[]"); a.forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); }catch(e){} reindexColl(); }
+const collTuple = v => [v.n,v.q,v.t||0,v.loc||""];
+function collLoadTuples(list){ (list||[]).forEach(([n,q,t,loc])=>{ if(!n) return; loc=String(loc||""); COLL.set(ckey(n,loc),{n,q:Number(q)||1,t:Number(t)||0,loc}); }); }
+function saveCollLocal(){ try{ localStorage.setItem("cforge.collection", JSON.stringify([...COLL.values()].map(collTuple))); }catch(e){} }
+function loadCollLocal(){ try{ collLoadTuples(JSON.parse(localStorage.getItem("cforge.collection")||"[]")); }catch(e){} reindexColl(); }
 function setSync(st,err){ collSync=st; collErr=err||""; renderSyncChip(); }
 function scheduleFlush(){ clearTimeout(flushT); flushT=setTimeout(flushColl,900); }
 async function flushColl(){
   if(SERVER){
     if(flushing||!dirty.size) return; flushing=true; setSync("saving"); dirty.clear();
-    try{ const r=await fetch("api/collection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:[...COLL.values()].map(v=>[v.n,v.q,v.t||0])})}); if(!r.ok) throw 0; setSync("cloud"); }
+    try{ const r=await fetch("api/collection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({items:[...COLL.values()].map(collTuple)})}); if(!r.ok) throw 0; setSync("cloud"); }
     catch(e){ setSync("error","Couldn't reach your server."); "_".split("").forEach(b=>dirty.add(b)); }
     flushing=false; if(dirty.size) scheduleFlush(); return;
   }
@@ -1180,7 +1198,7 @@ async function flushColl(){
   try{
     while(dirty.size){
       const b=[...dirty][0]; dirty.delete(b);
-      const items=[]; for(const [k,v] of COLL) if(bucket(k)===b) items.push([v.n,v.q,v.t||0]);
+      const items=[]; for(const [k,v] of COLL) if(bucket(k)===b) items.push(collTuple(v));
       const ref=cdb.doc(`data/users/${cuid}/coll-${b}`);
       if(items.length) await ref.set({items}); else await ref.delete();
     }
@@ -1194,7 +1212,7 @@ async function initCollectionStore(){
     try{
       const j=await fetch("api/collection").then(r=>r.json());
       // The server's list always wins, so cards deleted on one device don't come back from another browser's copy.
-      COLL.clear(); (j.items||[]).forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); reindexColl(); saveCollLocal(); setSync("cloud");
+      COLL.clear(); collLoadTuples(j.items); reindexColl(); saveCollLocal(); setSync("cloud");
     }catch(e){ setSync("error","Couldn't reach your server."); }
     renderCollection(); renderPool(); renderDeck(); renderOwnedToggles(); return;
   }
@@ -1207,7 +1225,7 @@ async function initCollectionStore(){
     const docs=snap.docs.filter(d=>d.exists&&/^coll-/.test(d.id));
     if(docs.length){
       COLL.clear();
-      docs.forEach(d=>{ const body=d.data()||{}; (body.items||[]).forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); });
+      docs.forEach(d=>{ const body=d.data()||{}; collLoadTuples(body.items); });
       reindexColl(); saveCollLocal(); setSync("cloud");
     } else if(COLL.size){
       "abcdefghijklmnopqrstuvwxyz_".split("").forEach(b=>dirty.add(b)); setSync("saving"); await flushColl();
@@ -1236,7 +1254,7 @@ function renderOwnedToggles(){
   $("preferOwned").checked=S.preferOwned!==false; $("ownedFree").checked=S.ownedFree!==false;
   $("ownedHintCount").textContent=ownedFitCount()||"some";
   $("importOwnRow").hidden=!(S.mode==="import"&&S.cards.some(c=>c.o==="deck"));
-  $("collCount").textContent = COLL.size? " "+COLL.size.toLocaleString() : "";
+  $("collCount").textContent = COLL.size? " "+uniqueCards().toLocaleString() : "";
 }
 function shopList(){ return S.cards.filter(c=>c.sel && !owned(c.n) && !(S.mode==="import"&&c.o==="deck")); }
 function renderShop(){
@@ -1257,19 +1275,40 @@ function renderCollection(){
   renderSyncChip(); renderOwnedToggles();
   let copies=0; COLL.forEach(v=>copies+=v.q);
   const sel=S.cards.filter(c=>c.sel); const ownDeck=sel.filter(c=>owned(c.n)).length;
-  $("collStats").innerHTML = `<div><b>${COLL.size.toLocaleString()}</b><span>different cards</span></div><div><b>${copies.toLocaleString()}</b><span>total copies</span></div>`
+  const decks=decksList();
+  renderDest(); renderLocFilter(decks);
+  $("collStats").innerHTML = `<div><b>${uniqueCards().toLocaleString()}</b><span>different cards</span></div><div><b>${copies.toLocaleString()}</b><span>total copies</span></div><div><b>${decks.length}</b><span>deck${decks.length===1?"":"s"}</span></div>`
     + (sel.length&&S.commanders.length?`<div><b>${ownDeck} / ${sel.length}</b><span>non-basic cards in your ${esc(S.commanders[0].name.split(",")[0])} build that you own</span></div>`:"");
-  const q=fold($("collSearch").value.trim()), sort=$("collSort").value;
-  let rows=[...COLL.values()]; if(q) rows=rows.filter(v=>fold(v.n).includes(q));
+  const q=fold($("collSearch").value.trim()), sort=$("collSort").value, where=$("collLoc").value||"*", place=where==="__gen"?"":where;
+  let rows=[...COLL.values()]; if(where!=="*") rows=rows.filter(v=>(v.loc||"")===place); if(q) rows=rows.filter(v=>fold(v.n).includes(q));
   rows.sort(sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
   const inDeck=new Set(sel.map(c=>key(c.n)));
   if(!COLL.size){ $("collTable").innerHTML='<div class="empty">No cards yet. Upload a spreadsheet or add cards above, and the deck builder will start marking what you own.</div>'; return; }
-  if(!rows.length){ $("collTable").innerHTML='<div class="empty">No cards in your collection match that search.</div>'; return; }
-  $("collTable").innerHTML = rows.slice(0,collLimit).map(v=>`<div class="crow"><span class="cn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${inDeck.has(key(v.n))?' <span class="tag info">In current deck</span>':""}</span><span class="step-q"><button type="button" data-cq="${esc(key(v.n))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(key(v.n))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(key(v.n))}">Remove</button></div>`).join("")
+  if(!rows.length){ $("collTable").innerHTML=`<div class="empty">${q?"No cards match that search here.":"Nothing here yet."}</div>`; return; }
+  $("collTable").innerHTML = rows.slice(0,collLimit).map(v=>`<div class="crow"><span class="cn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`).join("")
     + (rows.length>collLimit?`<div class="row" style="padding:10px 0"><button type="button" class="btn small" id="collMore">Show ${Math.min(150,rows.length-collLimit)} more</button><span class="note">Showing ${collLimit} of ${rows.length.toLocaleString()}</span></div>`:"");
 }
-function collCSV(){ const q=s=>'"'+String(s).replace(/"/g,'""')+'"'; return "Quantity,Name\n"+[...COLL.values()].sort((a,b)=>a.n.localeCompare(b.n)).map(v=>v.q+","+q(v.n)).join("\n"); }
-function collText(){ return [...COLL.values()].sort((a,b)=>a.n.localeCompare(b.n)).map(v=>v.q+" "+v.n).join("\n"); }
+function collRows(){ const w=$("collLoc").value||"*", place=w==="__gen"?"":w; return [...COLL.values()].filter(v=>w==="*"||(v.loc||"")===place).sort((a,b)=>(a.loc||"").localeCompare(b.loc||"")||a.n.localeCompare(b.n)); }
+function collCSV(){ const q=s=>'"'+String(s).replace(/"/g,'""')+'"'; return "Quantity,Name,Location\n"+collRows().map(v=>v.q+","+q(v.n)+","+q(v.loc||"General collection")).join("\n"); }
+function collText(){ return collRows().map(v=>v.q+" "+v.n).join("\n"); }
+// Where new cards go: general collection, an existing deck, or a new deck you name.
+function renderDest(){
+  const sel=$("collDest"); if(!sel) return; const cur=sel.value; const decks=decksList();
+  sel.innerHTML=`<option value="">General collection</option>${decks.length?`<optgroup label="Decks">${decks.map(d=>`<option value="${esc(d.name)}">${esc(d.name)} (${d.copies})</option>`).join("")}</optgroup>`:""}<option value="__new">New deck…</option>`;
+  sel.value = Array.from(sel.options||[]).some(o=>o.value===cur) ? cur : (cur==="__new" ? "__new" : "");
+  $("collDestName").hidden = sel.value!=="__new";
+}
+function currentDest(){ const v=$("collDest").value; if(v!=="__new") return {ok:true,loc:v}; const n=($("collDestName").value||"").trim().slice(0,80); return n?{ok:true,loc:n}:{ok:false}; }
+function needDest(){ const d=currentDest(); if(!d.ok){ $("collDestName").focus(); toast("Name the deck first, in “Where are these cards?”."); } return d; }
+function afterDest(loc){ if($("collDest").value==="__new"){ $("collDestName").value=""; renderDest(); $("collDest").value=loc; renderDest(); } }
+function renderLocFilter(decks){
+  const sel=$("collLoc"); if(!sel) return; const cur=sel.value||"*";
+  const gen=[...COLL.values()].filter(v=>!v.loc).reduce((a,v)=>a+v.q,0);
+  sel.innerHTML=`<option value="*">Everything</option><option value="__gen">General collection (${gen})</option>${decks.map(d=>`<option value="${esc(d.name)}">${esc(d.name)} (${d.copies})</option>`).join("")}`;
+  sel.value=Array.from(sel.options||[]).some(o=>o.value===cur)?cur:"*";
+  const isDeck=sel.value!=="*"&&sel.value!=="__gen"&&sel.value!=="";
+  $("locActions").hidden=!isDeck;
+}
 
 // ---------- spreadsheet parsing ----------
 let xlsxP=null;
@@ -1334,10 +1373,12 @@ async function handleFile(file){
     const already=cards.filter(c=>owned(c.n)).length;
     el.innerHTML = `<div class="prev"><div><b>${cards.length.toLocaleString()} different cards</b> (${copies.toLocaleString()} copies) found in ${esc(file.name)}${parsed.sheet?" · sheet “"+esc(parsed.sheet)+"”":""}, using ${esc(parsed.how)}.${already&&COLL.size?` ${already} are already in your collection.`:""}</div>
       <div class="prevtbl"><table><thead><tr><th>Qty</th><th>Name</th></tr></thead><tbody>${cards.slice(0,8).map(c=>`<tr><td>${c.q}</td><td>${esc(c.n)}</td></tr>`).join("")}${cards.length>8?`<tr><td></td><td class="muted">and ${(cards.length-8).toLocaleString()} more</td></tr>`:""}</tbody></table></div>
-      <div class="row"><button type="button" class="btn primary small" id="upAdd">${COLL.size?"Add to my collection":"Save as my collection"}</button>${COLL.size?`<button type="button" class="btn small" id="upReplace">Replace my collection with this file</button>`:""}<button type="button" class="btn small ghost" id="upCancel">Cancel</button></div>
-      ${COLL.size?'<span class="note">Add increases counts for cards you already have. Replace clears your current list first, which is right if this file is a full export of everything you own.</span>':""}</div>`;
+      <div class="row"><button type="button" class="btn primary small" id="upAdd">Add to ${esc(destName())}</button>${placeCount(currentDest().loc)?`<button type="button" class="btn small" id="upReplace">Replace everything in ${esc(destName())}</button>`:""}<button type="button" class="btn small ghost" id="upCancel">Cancel</button></div>
+      ${COLL.size?'<span class="note">Add increases counts for cards already there. Replace clears that place first (other decks stay as they are), which is right if this file is a full export of it.</span>':""}</div>`;
   }catch(e){ el.innerHTML='<div class="err">That file couldn\'t be read. Save it as .xlsx or .csv and try again.</div>'; }
 }
+function destName(){ const d=currentDest(); return !d.ok ? "the new deck" : d.loc ? d.loc : "General collection"; }
+function placeCount(loc){ return [...COLL.values()].filter(v=>(v.loc||"")===(loc||"")).length; }
 function parsePasted(text){ return aggregate(String(text).split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{ const m=l.match(/^(\d+)\s*x?\s+(.+)$/i); return m?{n:cleanName(m[2]),q:Number(m[1])}:{n:cleanName(l),q:1}; }).filter(c=>c.n)); }
 
 // ---------- add-card suggestions ----------
@@ -1842,13 +1883,14 @@ $("drop").addEventListener("drop",e=>{ const f=e.dataTransfer&&e.dataTransfer.fi
 $("upPreview").addEventListener("click",e=>{
   const id=e.target.id;
   if(id==="upCancel"){ pendingUpload=null; $("upPreview").innerHTML=""; }
-  if(id==="upAdd"&&pendingUpload){ const added=pendingUpload; const undo=collAddMany(pendingUpload,"add"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Added ${cardCount(added)} to your collection.`,{label:"Undo",fn:undo}); }
+  if(id==="upAdd"&&pendingUpload){ const d=needDest(); if(!d.ok) return; const added=pendingUpload; const undo=collAddMany(pendingUpload,"add",d.loc); pendingUpload=null; $("upPreview").innerHTML=""; afterDest(d.loc); toast(`Added ${cardCount(added)} to ${locLabel(d.loc)}.`,{label:"Undo",fn:undo}); }
   if(id==="upReplace"&&pendingUpload){
-    if(e.target.dataset.confirm!=="1"){ e.target.dataset.confirm="1"; e.target.textContent=`Click again to replace all ${COLL.size.toLocaleString()} cards`; return; }
-    const added=pendingUpload; const undo=collAddMany(pendingUpload,"replace"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Your collection now has ${cardCount(added)} from the file.`,{label:"Undo",fn:undo});
+    const d=needDest(); if(!d.ok) return;
+    if(e.target.dataset.confirm!=="1"){ e.target.dataset.confirm="1"; e.target.textContent=`Click again to replace the ${placeCount(d.loc).toLocaleString()} cards in ${d.loc||"General collection"}`; return; }
+    const added=pendingUpload; const undo=collAddMany(pendingUpload,"replace",d.loc); pendingUpload=null; $("upPreview").innerHTML=""; afterDest(d.loc); toast(`${d.loc||"General collection"} now has ${cardCount(added)} from the file.`,{label:"Undo",fn:undo});
   }
 });
-$("addForm").addEventListener("submit",e=>{ e.preventDefault(); const n=cleanName($("addName").value); const q=Math.max(1,Number($("addQty").value)||1); if(!n){ $("addName").focus(); return; } const cur=owned(n); const name=cur?cur.n:n; collSet(name,(cur?cur.q:0)+q); toast(`${name}: you now own ${(cur?cur.q:0)+q}.`); $("addName").value=""; $("addQty").value=1; AC2.items=[]; ac2Render(); $("addName").focus(); });
+$("addForm").addEventListener("submit",e=>{ e.preventDefault(); const n=cleanName($("addName").value); const q=Math.max(1,Number($("addQty").value)||1); if(!n){ $("addName").focus(); return; } const d=needDest(); if(!d.ok) return; const any=owned(n); const name=any?any.n:n; const here=COLL.get(ckey(name,d.loc)); collSet(name,(here?here.q:0)+q,d.loc); afterDest(d.loc); toast(`${name}: ${(here?here.q:0)+q} in ${d.loc||"General collection"}${owned(name).q>(here?here.q:0)+q?` (${owned(name).q} total)`:""}.`); $("addName").value=""; $("addQty").value=1; AC2.items=[]; ac2Render(); $("addName").focus(); });
 $("addName").addEventListener("input",ac2Update);
 $("addName").addEventListener("keydown",e=>{ const open=!$("addList").hidden&&AC2.items.length;
   if(e.key==="ArrowDown"&&open){ AC2.active=(AC2.active+1)%AC2.items.length; ac2Render(); e.preventDefault(); }
@@ -1857,12 +1899,12 @@ $("addName").addEventListener("keydown",e=>{ const open=!$("addList").hidden&&AC
   else if(e.key==="Escape"){ AC2.items=[]; ac2Render(); } });
 $("addList").addEventListener("mousedown",e=>{ const li=e.target.closest("li[data-i]"); if(!li) return; e.preventDefault(); ac2Pick(Number(li.dataset.i)); });
 $("addName").addEventListener("blur",()=>setTimeout(()=>{ AC2.items=[]; ac2Render(); },120));
-$("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList").value); if(!list.length){ $("pasteNote").textContent="Nothing to add. Put one card per line, like “4 Sol Ring”."; return; } const undo=collAddMany(list,"add"); $("pasteList").value=""; $("pasteNote").textContent=""; toast(`Added ${cardCount(list)}.`,{label:"Undo",fn:undo}); });
+$("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList").value); if(!list.length){ $("pasteNote").textContent="Nothing to add. Put one card per line, like “4 Sol Ring”."; return; } const d=needDest(); if(!d.ok) return; const undo=collAddMany(list,"add",d.loc); $("pasteList").value=""; $("pasteNote").textContent=""; afterDest(d.loc); toast(`Added ${cardCount(list)} to ${locLabel(d.loc)}.`,{label:"Undo",fn:undo}); });
 $("collSearch").addEventListener("input",()=>{ collLimit=150; renderCollection(); });
 $("collSort").addEventListener("change",renderCollection);
 $("collTable").addEventListener("click",e=>{
   if(e.target.id==="collMore"){ collLimit+=150; renderCollection(); return; }
-  const st=e.target.closest("[data-cq]"); if(st){ const v=COLL.get(st.dataset.cq); if(v) collSet(v.n, v.q+Number(st.dataset.d)); return; }
+  const st=e.target.closest("[data-cq]"); if(st){ const v=COLL.get(st.dataset.cq); if(v) collSet(v.n, v.q+Number(st.dataset.d), v.loc); return; }
   const rm=e.target.closest("[data-crm]"); if(rm){ const v=COLL.get(rm.dataset.crm); if(v){ const undo=collMutate(()=>{ COLL.delete(rm.dataset.crm); return [rm.dataset.crm]; },true); toast(`Removed ${v.n}.`,{label:"Undo",fn:undo}); } }
 });
 $("collCopy").addEventListener("click",()=>{ const t=collText(); navigator.clipboard.writeText(t).then(()=>toast("Collection copied as a list."),()=>toast("Copy didn't work in this view. Use Save .csv instead.")); });
@@ -1877,8 +1919,18 @@ $("preferOwned").addEventListener("change",e=>{ S.preferOwned=e.target.checked; 
 $("ownedFree").addEventListener("change",e=>{ S.ownedFree=e.target.checked; renderPool(); renderDeck(); save(); });
 $("ownedOnly").addEventListener("change",renderPool);
 $("shopCopy").addEventListener("click",()=>{ const t=shopList().map(c=>"1 "+c.n).join("\n"); navigator.clipboard.writeText(t).then(()=>toast("Shopping list copied."),()=>toast("Copy didn't work in this view.")); });
-$("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const undo=collAddMany(list,"add"); toast(`Added ${cardCount(list)} to your collection.`,{label:"Undo",fn:undo}); });
-$("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); const undo=collAddMany(aggregate(list),"add"); toast(`Added ${cardCount(aggregate(list))} from this deck to your collection.`,{label:"Undo",fn:undo}); });
+$("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const loc=defaultDeckName()||""; const undo=collAddMany(list,"add",loc); toast(`Added ${cardCount(list)} to ${locLabel(loc)}.`,{label:"Undo",fn:undo}); });
+$("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); basicsList().forEach(([b,k])=>list.push({n:b,q:k})); const loc=(defaultDeckName()||"Imported deck").replace(/ \(imported\)$/,""); const all=aggregate(list); const undo=collAddMany(all,"replace",loc); toast(`Saved ${cardCount(all)} as deck “${loc}” in your collection.`,{label:"Undo",fn:undo}); });
+$("collDest").addEventListener("change",()=>{ $("collDestName").hidden=$("collDest").value!=="__new"; if(!$("collDestName").hidden) $("collDestName").focus(); if(pendingUpload) $("upPreview").querySelector&&($("upPreview").querySelector("#upAdd")||{}).textContent!==undefined&&($("upPreview").querySelector("#upAdd").textContent="Add to "+destName()); });
+$("collDestName").addEventListener("input",()=>{ if(pendingUpload&&$("upPreview").querySelector){ const b=$("upPreview").querySelector("#upAdd"); if(b) b.textContent="Add to "+destName(); } });
+$("collLoc").addEventListener("change",()=>{ collLimit=150; renderCollection(); });
+$("locActions").addEventListener("click",e=>{
+  const loc=$("collLoc").value; if(!loc||loc==="*"||loc==="__gen") return;
+  const b=e.target.closest("button"); if(!b) return;
+  if(b.id==="locOpen"){ const text=[...COLL.values()].filter(v=>v.loc===loc).map(v=>`${v.q} ${v.n}`).join("\n"); S.mode="import"; S.importText=text; showView("builder"); render(); $("importText").value=text; importDeck().then(()=>{ S.savedName=loc; $("deckName").value=loc; renderSaveBar(); }); window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"}); return; }
+  if(b.id==="locMove"){ const undo=moveLocation(loc,""); $("collLoc").value="*"; renderCollection(); toast(`Moved “${loc}” into your general collection.`,{label:"Undo",fn:undo}); return; }
+  if(b.id==="locDelete"){ if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to delete “${loc}” and its cards`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete this deck"; } },4000); return; } b.dataset.confirm=""; b.textContent="Delete this deck"; const undo=deleteLocation(loc); $("collLoc").value="*"; renderCollection(); toast(`Deleted “${loc}”.`,{label:"Undo",fn:undo}); }
+});
 
 // ---------- save / discard ----------
 $("saveDeck").addEventListener("click",saveDeck);

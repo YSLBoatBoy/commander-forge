@@ -128,7 +128,10 @@ test("collection saves and replaces", async () => {
   const g = await api("/api/collection");
   assert.deepEqual(g.json.items.map((i) => i[0]), ["Rhystic Study", "Sol Ring"]);
   await api("/api/collection", { method: "PUT", body: { items: [["Opt", 2, 3]] } });
-  assert.deepEqual((await api("/api/collection")).json.items, [["Opt", 2, 3]]);
+  assert.deepEqual((await api("/api/collection")).json.items, [["Opt", 2, 3, ""]]);
+  await api("/api/collection", { method: "PUT", body: { items: [["Opt", 2, 3, ""], ["Opt", 1, 4, "Vivi Storm"], ["Sol Ring", 1, 5, "Vivi Storm"]] } });
+  const both = (await api("/api/collection")).json.items;
+  assert.deepEqual(both, [["Opt", 2, 3, ""], ["Opt", 1, 4, "Vivi Storm"], ["Sol Ring", 1, 5, "Vivi Storm"]]);
 });
 
 test("saved builds and current state round-trip", async () => {
@@ -168,7 +171,7 @@ test("data survives a restart", async () => {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   b = `http://127.0.0.1:${server.address().port}`;
   const items = (await (await fetch(b + "/api/collection")).json()).items;
-  assert.deepEqual(items, [["Sol Ring", 2, 0]]);
+  assert.deepEqual(items, [["Sol Ring", 2, 0, ""]]);
   await new Promise((r) => server.close(r));
   fs.rmSync(d, { recursive: true, force: true });
 });
@@ -206,4 +209,18 @@ test("model list comes from the provider, filtered and in fallback order", async
   assert.deepEqual(ids.slice(0, 2), ["gemini-3.8-flash", "gemini-3.6-flash"]);
   assert.ok(!ids.includes("gemini-3.8-flash-tts"));
   assert.ok(!ids.some((i) => i.includes("embedding")));
+});
+
+test("an existing database without deck slots is upgraded in place", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "cforge-migrate-"));
+  const old = new DatabaseSync(path.join(d, "commander-forge.db"));
+  old.exec("CREATE TABLE collection (k TEXT PRIMARY KEY, name TEXT NOT NULL, qty INTEGER NOT NULL, added INTEGER NOT NULL); INSERT INTO collection VALUES ('sol ring','Sol Ring',3,1);");
+  old.close();
+  const { server } = createServer({ dataDir: d, env: {}, fetchImpl: fakeFetch });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const b = `http://127.0.0.1:${server.address().port}`;
+  assert.deepEqual((await (await fetch(b + "/api/collection")).json()).items, [["Sol Ring", 3, 1, ""]]);
+  await new Promise((r) => server.close(r));
+  fs.rmSync(d, { recursive: true, force: true });
 });

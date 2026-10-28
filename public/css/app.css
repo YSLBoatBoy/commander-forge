@@ -227,6 +227,9 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .step-q button:hover{background:var(--sunk)}
 .step-q span{min-width:34px;text-align:center;font:500 .9rem var(--f-mono)}
 .tag.own{background:var(--ok-soft);color:var(--ok)}
+.tag.deckloc{background:var(--accent-soft);color:var(--accent)}
+.destbar{display:grid;gap:6px;border-top:1px solid var(--line);padding-top:12px}
+.destbar select{min-width:220px;max-width:100%}
 .toast .tbtn{margin-left:10px;border:1px solid currentColor;background:none;color:inherit;border-radius:4px;padding:1px 8px;cursor:pointer;font-weight:700}
 .shop{display:grid;gap:6px}
 .combo{display:grid;gap:4px;padding:10px 8px;border-bottom:1px solid var(--line)}

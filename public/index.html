@@ -245,6 +245,14 @@
   <section class="step" aria-labelledby="hc0">
     <div class="step-h"><h2 id="hc0">My collection</h2><span class="sync" id="collSync"><i></i><span>Loading…</span></span></div>
     <div class="cstats" id="collStats"></div>
+    <div class="destbar">
+      <label class="f" for="collDest">Where are these cards?</label>
+      <div class="row">
+        <select id="collDest" aria-describedby="destHint"></select>
+        <input id="collDestName" type="text" class="grow" placeholder="Deck name, e.g. Vivi Izzet Storm" maxlength="80" aria-label="New deck name" hidden>
+      </div>
+      <span class="note" id="destHint">Applies to uploads, added cards and pasted lists. Pick a deck to keep its cards in their own slot.</span>
+    </div>
   </section>
   <div class="cgrid">
     <section class="step" aria-labelledby="hc1">
@@ -269,10 +277,16 @@
     <div class="step-h"><h2 id="hc3">Cards</h2></div>
     <div class="row">
       <input id="collSearch" type="text" class="grow" placeholder="Search your cards" aria-label="Search your cards">
+      <select id="collLoc" aria-label="Show"><option value="*">Everything</option></select>
       <select id="collSort" aria-label="Sort"><option value="name">A–Z</option><option value="qty">Most copies</option><option value="recent">Recently added</option></select>
       <button class="btn small" id="collCopy" type="button">Copy as list</button>
       <button class="btn small" id="collDl" type="button" hidden>Save .csv</button>
       <button class="btn small ghost" id="collClear" type="button">Delete all</button>
+    </div>
+    <div class="row" id="locActions" hidden>
+      <button class="btn small" id="locOpen" type="button">Open in deck builder</button>
+      <button class="btn small" id="locMove" type="button">Move these to general collection</button>
+      <button class="btn small ghost" id="locDelete" type="button">Delete this deck</button>
     </div>
     <div id="collTable" class="ctable"></div>
   </section>

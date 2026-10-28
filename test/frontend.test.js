@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -188,4 +188,27 @@ test("replace and delete-all actually change the saved collection, and undo rest
   T.clearCollection();
   assert.equal(T.COLL.size, 0);
   assert.equal(JSON.parse(store["cforge.collection"]).length, 0);
+});
+
+test("cards can live in named decks; owned counts every place", () => {
+  const { T, store } = loadPage();
+  T.collAddMany([{ n: "Sol Ring", q: 1 }, { n: "Island", q: 10 }], "add", "");
+  T.collAddMany([{ n: "Sol Ring", q: 1 }, { n: "Brainstorm", q: 1 }], "add", "Vivi Storm");
+  assert.equal(T.owned("Sol Ring").q, 2);
+  assert.equal(T.ownedWhere(T.owned("Sol Ring")), "also in Vivi Storm");
+  assert.equal(T.ownedWhere(T.owned("Brainstorm")), "in Vivi Storm");
+  assert.equal(T.uniqueCards(), 3);
+  assert.deepEqual(plain(T.decksList()), [{ name: "Vivi Storm", cards: 2, copies: 2 }]);
+  // replacing a deck leaves the general collection alone
+  T.collAddMany([{ n: "Opt", q: 1 }], "replace", "Vivi Storm");
+  assert.equal(T.owned("Island").q, 10);
+  assert.equal(T.owned("Brainstorm"), null);
+  T.moveLocation("Vivi Storm", "");
+  assert.equal(T.decksList().length, 0);
+  assert.ok(T.owned("Opt"));
+  const saved = JSON.parse(store["cforge.collection"]);
+  assert.ok(saved.every((r) => r.length === 4));
+  T.collAddMany([{ n: "Ponder", q: 1 }], "add", "Niv");
+  T.deleteLocation("Niv");
+  assert.equal(T.owned("Ponder"), null);
 });
