@@ -1161,6 +1161,8 @@ function collAddMany(list, mode){ // list: [{n,q}] ; mode: add | replace
 function collSet(name,q){
   return collMutate(()=>{ const k=key(name); const cur=COLL.get(k); if(q<=0){ COLL.delete(k); } else if(cur){ cur.q=q; } else COLL.set(k,{n:name,q,t:Date.now()}); return [k]; }, q<=0);
 }
+// "100 cards (82 different)" when copies and unique names differ, else "82 cards".
+function cardCount(list){ const copies=list.reduce((a,c)=>a+(Number(c.q)||1),0), uniq=list.length; return copies===uniq ? `${uniq.toLocaleString()} card${uniq===1?"":"s"}` : `${copies.toLocaleString()} cards (${uniq.toLocaleString()} different)`; }
 function clearCollection(){ return collMutate(()=>{ COLL.clear(); return "all"; },true); }
 function saveCollLocal(){ try{ localStorage.setItem("cforge.collection", JSON.stringify([...COLL.values()].map(v=>[v.n,v.q,v.t||0]))); }catch(e){} }
 function loadCollLocal(){ try{ const a=JSON.parse(localStorage.getItem("cforge.collection")||"[]"); a.forEach(([n,q,t])=>{ if(n) COLL.set(key(n),{n,q:Number(q)||1,t:Number(t)||0}); }); }catch(e){} reindexColl(); }
@@ -1840,10 +1842,10 @@ $("drop").addEventListener("drop",e=>{ const f=e.dataTransfer&&e.dataTransfer.fi
 $("upPreview").addEventListener("click",e=>{
   const id=e.target.id;
   if(id==="upCancel"){ pendingUpload=null; $("upPreview").innerHTML=""; }
-  if(id==="upAdd"&&pendingUpload){ const n=pendingUpload.length; const undo=collAddMany(pendingUpload,"add"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Added ${n.toLocaleString()} cards to your collection.`,{label:"Undo",fn:undo}); }
+  if(id==="upAdd"&&pendingUpload){ const added=pendingUpload; const undo=collAddMany(pendingUpload,"add"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Added ${cardCount(added)} to your collection.`,{label:"Undo",fn:undo}); }
   if(id==="upReplace"&&pendingUpload){
     if(e.target.dataset.confirm!=="1"){ e.target.dataset.confirm="1"; e.target.textContent=`Click again to replace all ${COLL.size.toLocaleString()} cards`; return; }
-    const n=pendingUpload.length; const undo=collAddMany(pendingUpload,"replace"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Your collection now has ${n.toLocaleString()} cards from the file.`,{label:"Undo",fn:undo});
+    const added=pendingUpload; const undo=collAddMany(pendingUpload,"replace"); pendingUpload=null; $("upPreview").innerHTML=""; toast(`Your collection now has ${cardCount(added)} from the file.`,{label:"Undo",fn:undo});
   }
 });
 $("addForm").addEventListener("submit",e=>{ e.preventDefault(); const n=cleanName($("addName").value); const q=Math.max(1,Number($("addQty").value)||1); if(!n){ $("addName").focus(); return; } const cur=owned(n); const name=cur?cur.n:n; collSet(name,(cur?cur.q:0)+q); toast(`${name}: you now own ${(cur?cur.q:0)+q}.`); $("addName").value=""; $("addQty").value=1; AC2.items=[]; ac2Render(); $("addName").focus(); });
@@ -1855,7 +1857,7 @@ $("addName").addEventListener("keydown",e=>{ const open=!$("addList").hidden&&AC
   else if(e.key==="Escape"){ AC2.items=[]; ac2Render(); } });
 $("addList").addEventListener("mousedown",e=>{ const li=e.target.closest("li[data-i]"); if(!li) return; e.preventDefault(); ac2Pick(Number(li.dataset.i)); });
 $("addName").addEventListener("blur",()=>setTimeout(()=>{ AC2.items=[]; ac2Render(); },120));
-$("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList").value); if(!list.length){ $("pasteNote").textContent="Nothing to add. Put one card per line, like “4 Sol Ring”."; return; } const undo=collAddMany(list,"add"); $("pasteList").value=""; $("pasteNote").textContent=""; toast(`Added ${list.length} cards.`,{label:"Undo",fn:undo}); });
+$("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList").value); if(!list.length){ $("pasteNote").textContent="Nothing to add. Put one card per line, like “4 Sol Ring”."; return; } const undo=collAddMany(list,"add"); $("pasteList").value=""; $("pasteNote").textContent=""; toast(`Added ${cardCount(list)}.`,{label:"Undo",fn:undo}); });
 $("collSearch").addEventListener("input",()=>{ collLimit=150; renderCollection(); });
 $("collSort").addEventListener("change",renderCollection);
 $("collTable").addEventListener("click",e=>{
@@ -1875,8 +1877,8 @@ $("preferOwned").addEventListener("change",e=>{ S.preferOwned=e.target.checked; 
 $("ownedFree").addEventListener("change",e=>{ S.ownedFree=e.target.checked; renderPool(); renderDeck(); save(); });
 $("ownedOnly").addEventListener("change",renderPool);
 $("shopCopy").addEventListener("click",()=>{ const t=shopList().map(c=>"1 "+c.n).join("\n"); navigator.clipboard.writeText(t).then(()=>toast("Shopping list copied."),()=>toast("Copy didn't work in this view.")); });
-$("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const undo=collAddMany(list,"add"); toast(`Added ${list.length} cards to your collection.`,{label:"Undo",fn:undo}); });
-$("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); const undo=collAddMany(aggregate(list),"add"); toast(`Added ${list.length} cards from this deck to your collection.`,{label:"Undo",fn:undo}); });
+$("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const undo=collAddMany(list,"add"); toast(`Added ${cardCount(list)} to your collection.`,{label:"Undo",fn:undo}); });
+$("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); const undo=collAddMany(aggregate(list),"add"); toast(`Added ${cardCount(aggregate(list))} from this deck to your collection.`,{label:"Undo",fn:undo}); });
 
 // ---------- save / discard ----------
 $("saveDeck").addEventListener("click",saveDeck);
