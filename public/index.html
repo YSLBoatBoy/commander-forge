@@ -254,6 +254,11 @@
       <span class="note" id="destHint">Applies to uploads, added cards and pasted lists. Pick a deck to keep its cards in their own slot.</span>
     </div>
   </section>
+  <section class="step" aria-labelledby="hcDecks" id="decksSec">
+    <div class="step-h"><h2 id="hcDecks">Your decks</h2><span class="hint">Click a deck to see how it plays, playtest it, or get change suggestions.</span></div>
+    <div class="deckgrid" id="deckGrid"></div>
+    <div id="deckDetail"></div>
+  </section>
   <div class="cgrid">
     <section class="step" aria-labelledby="hc1">
       <div class="step-h"><h2 id="hc1">Upload a spreadsheet</h2></div>
@@ -282,11 +287,6 @@
       <button class="btn small" id="collCopy" type="button">Copy as list</button>
       <button class="btn small" id="collDl" type="button" hidden>Save .csv</button>
       <button class="btn small ghost" id="collClear" type="button">Delete all</button>
-    </div>
-    <div class="row" id="locActions" hidden>
-      <button class="btn small" id="locOpen" type="button">Open in deck builder</button>
-      <button class="btn small" id="locMove" type="button">Move these to general collection</button>
-      <button class="btn small ghost" id="locDelete" type="button">Delete this deck</button>
     </div>
     <div id="collTable" class="ctable"></div>
   </section>

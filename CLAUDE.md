@@ -43,6 +43,7 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 | `GET /api/ai/models?provider=` | live model list for the dropdowns (falls back to `ORDER` in ai.js) |
 | `GET/PUT /api/collection` | `{items:[[name,qty,addedMs,loc]]}`; `loc` is a deck name or `""` for the general collection (PUT replaces all) |
 | `GET /api/builds`, `GET/PUT/DELETE /api/builds/:name` | saved builds |
+| `GET/PUT /api/decks` | `{decks:{<deck name>:{commanders, desc, descSig, sugg, suggSig, ...}}}` extras for decks in the collection |
 | `GET/PUT /api/state` | unused since 1.1 (the working deck is no longer kept between visits); kept for compatibility |
 
 ## Conventions
@@ -55,3 +56,4 @@ Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json
 - Model fallback: `runAi` tries the chosen model, then `ORDER[provider]` (lighter first for quick tasks) on overloaded/rate-limit/timeout/unknown-model errors, only before any text streamed. `X-AI-Model` / `X-AI-Skipped` headers tell the page which model answered. Toggle: `autoFallback` setting.
 - Working deck: every visit starts empty (`loadInitial`). Nothing is kept until the user clicks **Save deck** (step 8, `saveDeck`), which writes to Saved builds. `save()` only marks `DIRTY`; a `beforeunload` prompt guards unsaved changes. Bracket, budget and export format persist in `localStorage cforge.prefs`.
 - Collection places: each entry is one card in one place (`COLL` keyed by `ckey(name, loc)`). `owned(name)` sums every place and lists them in `.locs`; `ownedWhere()` makes the "in Vivi Storm" label. Replace only empties the chosen place.
+- Deck shelf (My collection → Your decks): tiles from `decksList()`, details in `renderDeckDetail()`. Extras in `DECKMETA` (localStorage `cforge.deckmeta`, server `/api/decks`, artifact db doc `data/users/<id>/meta-decks`). AI write-ups store `descSig`/`suggSig` = `deckSig(loc)`; a mismatch shows the "changed since" note. Commander candidates come from `commanders.json` (`isCommanderName`). Playtest/Open go through `openDeckInBuilder()`.

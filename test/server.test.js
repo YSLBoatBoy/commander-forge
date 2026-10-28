@@ -224,3 +224,10 @@ test("an existing database without deck slots is upgraded in place", async () =>
   await new Promise((r) => server.close(r));
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test("deck extras round-trip", async () => {
+  assert.deepEqual((await api("/api/decks")).json, { decks: {} });
+  await api("/api/decks", { method: "PUT", body: { decks: { "Vivi Storm": { commanders: ["Vivi Ornitier"], desc: { summary: "x" } } } } });
+  assert.equal((await api("/api/decks")).json.decks["Vivi Storm"].commanders[0], "Vivi Ornitier");
+  assert.equal((await api("/api/decks", { method: "PUT", body: { decks: [] } })).status, 400);
+});

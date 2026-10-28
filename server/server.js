@@ -167,6 +167,12 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
         if (req.method === "DELETE") { db.buildDel(name); return send(res, 200, { ok: true }); }
       }
 
+      // ---- per-deck extras for decks in the collection (commander, AI write-ups) ----
+      if (p === "/api/decks") {
+        if (req.method === "GET") return send(res, 200, { decks: db.kvGet("deck_meta", {}) || {} });
+        if (req.method === "PUT") { const b = await readBody(req); if (!b.decks || typeof b.decks !== "object" || Array.isArray(b.decks)) return send(res, 400, { code: "invalid_request", message: "Expected {decks:{...}}." }); db.kvSet("deck_meta", b.decks); return send(res, 200, { ok: true }); }
+      }
+
       // ---- current working state (so a build follows you between devices) ----
       if (p === "/api/state") {
         if (req.method === "GET") return send(res, 200, { state: db.kvGet("current_state", null) });

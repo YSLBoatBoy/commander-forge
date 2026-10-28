@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -211,4 +211,33 @@ test("cards can live in named decks; owned counts every place", () => {
   T.collAddMany([{ n: "Ponder", q: 1 }], "add", "Niv");
   T.deleteLocation("Niv");
   assert.equal(T.owned("Ponder"), null);
+});
+
+test("decks in the collection: commander pick, colors, write-ups that know when they're stale", async () => {
+  const { T, store } = loadPage();
+  T.collAddMany([{ n: "Vivi Ornitier", q: 1 }, { n: "Niv-Mizzet, Parun", q: 1 }, { n: "Brainstorm", q: 1 }, { n: "Island", q: 10 }], "add", "Izzet");
+  assert.deepEqual(plain(T.commanderCandidates("Izzet")), ["Niv-Mizzet, Parun", "Vivi Ornitier"]);
+  assert.deepEqual(plain(T.deckCommanders("Izzet")), []);            // two candidates: player must pick
+  T.setMeta("Izzet", { commanders: ["Vivi Ornitier"] });
+  assert.deepEqual(plain(T.deckCommanders("Izzet")), ["Vivi Ornitier"]);
+  assert.deepEqual(plain(T.deckColors("Izzet")), ["U", "R"]);
+  await new Promise((r) => setImmediate(r));   // let the page finish starting up before plugging in a fake AI
+  const fake = () => Promise.resolve({ text: "" });
+  fake.json = async (prompt) => prompt.includes("coach")
+    ? { howToPlay: ["Sculpt with cantrips"], mulligan: "Keep 2 lands + cantrip", swaps: [{ add: "Ponder", cut: "Brainstorm", why: "x" }] }
+    : [{ style: "Izzet spells", summary: "Casts spells and wins with Vivi.", phases: ["Early game: dig"], winCons: ["Vivi pings"] }];
+  T.setSample(fake);
+  await T.describeDeck("Izzet");
+  const m = T.DECKMETA.Izzet;
+  assert.equal(m.desc.summary, "Casts spells and wins with Vivi.");
+  assert.equal(m.descSig, T.deckSig("Izzet"));
+  assert.ok(JSON.parse(store["cforge.deckmeta"]).Izzet.desc);
+  T.collAddMany([{ n: "Opt", q: 1 }], "add", "Izzet");
+  assert.notEqual(m.descSig, T.deckSig("Izzet"), "adding a card marks the write-up out of date");
+  await T.suggestDeck("Izzet");
+  assert.ok(T.DECKMETA.Izzet.sugg, JSON.stringify(T.DECKERR));
+  assert.equal(T.DECKMETA.Izzet.sugg.swaps[0].add, "Ponder");
+  T.renameDeck("Izzet", "Vivi Storm");
+  assert.ok(T.DECKMETA["Vivi Storm"].desc && !T.DECKMETA.Izzet);
+  assert.equal(T.decksList()[0].name, "Vivi Storm");
 });

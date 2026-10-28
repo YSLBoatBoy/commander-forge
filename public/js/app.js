@@ -1012,6 +1012,7 @@ async function importDeck(){
     }
     S.commanders=cmdRows.slice(0,2).map(r=>{ const d=CARDDB[key(r.n)]; return d?{name:d.name,manaCost:d.mana,type:d.type,text:d.text}:{name:r.n,manaCost:"",type:"",text:""}; });
     const ci=new Set(); cmdRows.forEach(r=>{ const d=CARDDB[key(r.n)]; if(d) d.ci.forEach(x=>ci.add(x)); });
+    if(!ci.size) S.commanders.forEach(c=>{ const m=cmdInfo(c.name); if(m) m.ci.split("").forEach(x=>ci.add(x)); });   // offline: built-in commander list
     S.colors=["W","U","B","R","G"].filter(c=>ci.has(c));
     S.basics={};
     const cmdKeys=new Set(S.commanders.map(c=>key(c.name)));
@@ -1214,6 +1215,7 @@ async function initCollectionStore(){
       // The server's list always wins, so cards deleted on one device don't come back from another browser's copy.
       COLL.clear(); collLoadTuples(j.items); reindexColl(); saveCollLocal(); setSync("cloud");
     }catch(e){ setSync("error","Couldn't reach your server."); }
+    await loadMetaRemote();
     renderCollection(); renderPool(); renderDeck(); renderOwnedToggles(); return;
   }
   try{
@@ -1231,6 +1233,7 @@ async function initCollectionStore(){
       "abcdefghijklmnopqrstuvwxyz_".split("").forEach(b=>dirty.add(b)); setSync("saving"); await flushColl();
     } else setSync("cloud");
   }catch(e){ setSync("local"); }
+  await loadMetaRemote();
   renderCollection(); renderPool(); renderDeck(); renderOwnedToggles();
 }
 function renderSyncChip(){
@@ -1276,7 +1279,7 @@ function renderCollection(){
   let copies=0; COLL.forEach(v=>copies+=v.q);
   const sel=S.cards.filter(c=>c.sel); const ownDeck=sel.filter(c=>owned(c.n)).length;
   const decks=decksList();
-  renderDest(); renderLocFilter(decks);
+  renderDest(); renderLocFilter(decks); renderDecks();
   $("collStats").innerHTML = `<div><b>${uniqueCards().toLocaleString()}</b><span>different cards</span></div><div><b>${copies.toLocaleString()}</b><span>total copies</span></div><div><b>${decks.length}</b><span>deck${decks.length===1?"":"s"}</span></div>`
     + (sel.length&&S.commanders.length?`<div><b>${ownDeck} / ${sel.length}</b><span>non-basic cards in your ${esc(S.commanders[0].name.split(",")[0])} build that you own</span></div>`:"");
   const q=fold($("collSearch").value.trim()), sort=$("collSort").value, where=$("collLoc").value||"*", place=where==="__gen"?"":where;
@@ -1307,7 +1310,187 @@ function renderLocFilter(decks){
   sel.innerHTML=`<option value="*">Everything</option><option value="__gen">General collection (${gen})</option>${decks.map(d=>`<option value="${esc(d.name)}">${esc(d.name)} (${d.copies})</option>`).join("")}`;
   sel.value=Array.from(sel.options||[]).some(o=>o.value===cur)?cur:"*";
   const isDeck=sel.value!=="*"&&sel.value!=="__gen"&&sel.value!=="";
-  $("locActions").hidden=!isDeck;
+  if($("locActions")) $("locActions").hidden=!isDeck;
+}
+
+// ================= deck shelf (decks kept in My collection) =================
+// Per-deck extras live in DECKMETA[deckName]: {commanders:[], desc:{...}, descSig, descAt, sugg:{...}, suggSig, suggAt}.
+let DECKMETA={}, OPENDECK=null, metaT=null;
+const DECKBUSY={}, DECKERR={};
+const deckEntries = loc => [...COLL.values()].filter(v=>v.loc===loc);
+const deckCopies = loc => deckEntries(loc).reduce((a,v)=>a+v.q,0);
+function hashStr(s){ let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0; return (h>>>0).toString(36); }
+// Changes whenever the deck's cards or commander change, so saved write-ups can say they're out of date.
+function deckSig(loc){ return hashStr(deckEntries(loc).map(v=>v.q+" "+key(v.n)).sort().join("|")+"#"+deckCommanders(loc).map(key).join("+")); }
+let CMDSET=null;
+function isCommanderName(n){ if(!CMDSET&&CMDS.length) CMDSET=new Set(CMDS.flatMap(c=>{ const k=key(c.n); return [k,k.split(" // ")[0]]; })); const k=key(n); return !!CMDSET&&(CMDSET.has(k)||CMDSET.has(k.split(" // ")[0])); }
+function cmdInfo(n){ const k=key(n).split(" // ")[0]; return CMDS.find(c=>key(c.n)===key(n)||key(c.n).split(" // ")[0]===k)||null; }
+function commanderCandidates(loc){
+  return deckEntries(loc).filter(v=>{ const d=CARDDB[key(v.n)]; return isCommanderName(v.n)||(d&&/legendary/i.test(d.type)&&/creature|planeswalker/i.test(d.type)); }).map(v=>v.n).sort((a,b)=>a.localeCompare(b));
+}
+function deckCommanders(loc){
+  const m=DECKMETA[loc]||{}, here=new Set(deckEntries(loc).map(v=>key(v.n)));
+  if(m.commanders&&m.commanders.length) return m.commanders.filter(n=>here.has(key(n)));
+  const c=commanderCandidates(loc); return c.length===1?c:[];
+}
+function deckColors(loc){
+  const ci=new Set();
+  deckCommanders(loc).forEach(n=>{ const d=CARDDB[key(n)]; const c=cmdInfo(n); ((d&&d.ci)||(c?c.ci.split(""):[])).forEach(x=>ci.add(x)); });
+  return ["W","U","B","R","G"].filter(x=>ci.has(x));
+}
+function deckStats(loc){
+  const e=deckEntries(loc); let value=0, priced=0, lands=0, mvSum=0, mvN=0, gc=0;
+  e.forEach(v=>{ const d=CARDDB[key(v.n)]; if(d&&d.usd!=null){ value+=d.usd*v.q; priced++; } const isLand=BASIC_NAMES.test(v.n)||(d&&/\bLand\b/.test(d.type)&&!/Creature/.test(d.type)); if(isLand) lands+=v.q; else if(d){ mvSum+=d.mv*v.q; mvN+=v.q; } if(isGC(v.n)||(d&&d.gc)) gc++; });
+  return {copies:deckCopies(loc), value, priced, known:e.filter(v=>CARDDB[key(v.n)]).length, total:e.length, lands, avgMv:mvN?mvSum/mvN:null, gc};
+}
+function setMeta(loc,patch){ DECKMETA[loc]=Object.assign({},DECKMETA[loc]||{},patch); persistMeta(); }
+function persistMeta(){ try{ localStorage.setItem("cforge.deckmeta",JSON.stringify(DECKMETA)); }catch(e){} clearTimeout(metaT); metaT=setTimeout(pushMeta,600); }
+async function pushMeta(){ try{ if(SERVER) await fetch("api/decks",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({decks:DECKMETA})}); else if(cdb&&cuid) await cdb.doc(`data/users/${cuid}/meta-decks`).set({decks:DECKMETA}); }catch(e){} }
+function loadMetaLocal(){ try{ DECKMETA=JSON.parse(localStorage.getItem("cforge.deckmeta")||"{}")||{}; }catch(e){ DECKMETA={}; } }
+async function loadMetaRemote(){
+  try{
+    if(SERVER){ const j=await fetch("api/decks").then(r=>r.json()); if(j&&j.decks&&typeof j.decks==="object") DECKMETA=j.decks; }
+    else if(cdb&&cuid){ const d=await cdb.doc(`data/users/${cuid}/meta-decks`).get(); if(d.exists) DECKMETA=(d.data()||{}).decks||{}; }
+    try{ localStorage.setItem("cforge.deckmeta",JSON.stringify(DECKMETA)); }catch(e){}
+  }catch(e){}
+  renderDecks();
+}
+function renameDeck(from,to){
+  to=String(to||"").trim().slice(0,80); if(!to||to===from) return false;
+  const undo=moveLocation(from,to);
+  if(DECKMETA[from]){ DECKMETA[to]=Object.assign({},DECKMETA[to]||{},DECKMETA[from]); delete DECKMETA[from]; persistMeta(); }
+  if(OPENDECK===from) OPENDECK=to;
+  if($("collLoc").value===from){ renderCollection(); $("collLoc").value=to; }
+  return undo;
+}
+function deckListText(loc){
+  return deckEntries(loc).sort((a,b)=>a.n.localeCompare(b.n)).map(v=>{ const d=CARDDB[key(v.n)]; return `${v.q} ${v.n}${d?` | ${d.type}${d.mana?" "+d.mana:""}`:""}`; }).join("\n");
+}
+function deckCmdText(loc){ const c=deckCommanders(loc); return c.length ? c.map(n=>{ const d=CARDDB[key(n)]; return n+(d&&d.text?" — "+d.text.replace(/\n/g," "):""); }).join(" | ") : "not set; infer the most likely commander from the list"; }
+const firstObj = r => Array.isArray(r) ? (r.find(x=>x&&typeof x==="object"&&!Array.isArray(x))||{}) : (r&&typeof r==="object"?r:{});
+const arr = (x,n) => (Array.isArray(x)?x:x?[x]:[]).map(v=>typeof v==="object"&&v?(v.text||v.name||v.n||JSON.stringify(v)):String(v)).filter(Boolean).slice(0,n||8);
+async function loadDeckData(loc){ if(LIVE){ await liveTry(()=>scryNames(deckEntries(loc).map(v=>v.n))); } renderDecks(); }
+async function describeDeck(loc){
+  if(needClaude()) return;
+  DECKBUSY[loc]="desc"; delete DECKERR[loc]; renderDecks();
+  try{
+    await loadDeckData(loc);
+    const r=firstObj(await sample.json(`You are an expert Magic: The Gathering Commander player. Explain how this player's deck works, based only on the cards in it.
+COMMANDER: ${deckCmdText(loc)}
+DECK (${deckCopies(loc)} cards, "count name | type cost"):
+${deckListText(loc)}
+
+Reply with only one JSON object:
+{"style":"3-6 word archetype, e.g. Izzet spellslinger storm","summary":"3-4 sentences on how the deck plays and wins, naming key cards","phases":["Early game: ...","Mid game: ...","Late game: ..."],"winCons":["2-4 concrete ways it wins, naming the cards"],"engines":["2-4 key synergies or engines, naming the cards"],"strengths":["2-3 short points"],"weaknesses":["2-3 short points"],"bracket":<estimated Commander bracket 1-5>,"bracketWhy":"one sentence"}`,{modelTier:"default"}));
+    const desc={style:String(r.style||r.archetype||""),summary:String(r.summary||r.description||r.overview||""),phases:arr(r.phases||r.plan,4),winCons:arr(r.winCons||r.wincons||r.win_conditions,5),engines:arr(r.engines||r.synergies,5),strengths:arr(r.strengths,4),weaknesses:arr(r.weaknesses,4),bracket:Number(r.bracket)||null,bracketWhy:String(r.bracketWhy||r.bracket_why||"")};
+    if(!desc.summary) throw {code:"no_desc",message:"The AI's answer didn't include a description. Try Regenerate."};
+    setMeta(loc,{desc,descSig:deckSig(loc),descAt:Date.now(),descModel:(LAST_AI&&LAST_AI.model)||""});
+  }catch(e){ if(!(e&&e.code==="cancelled")) DECKERR[loc]={part:"desc",msg:errMsg(e)}; }
+  delete DECKBUSY[loc]; renderDecks();
+}
+async function suggestDeck(loc){
+  if(needClaude()) return;
+  DECKBUSY[loc]="sugg"; delete DECKERR[loc]; renderDecks();
+  try{
+    await loadDeckData(loc);
+    const here=new Set(deckEntries(loc).map(v=>key(v.n)));
+    const spare=[...COLL.values()].filter(v=>!v.loc&&!here.has(key(v.n))&&!BASIC_NAMES.test(v.n)).map(v=>v.n).slice(0,250);
+    const desc=(DECKMETA[loc]||{}).desc;
+    const r=firstObj(await sample.json(`You are an expert Magic: The Gathering Commander coach. Help the player pilot and improve this deck.
+COMMANDER: ${deckCmdText(loc)}
+DECK (${deckCopies(loc)} cards, "count name | type cost"):
+${deckListText(loc)}
+${desc&&desc.summary?`HOW IT WORKS (earlier analysis): ${desc.summary}\n`:""}${spare.length?`CARDS THE PLAYER OWNS BUT ISN'T USING (prefer these for adds when they fit; they cost nothing): ${spare.join("; ")}\n`:""}
+Suggest 5-8 swaps. Every add must be Commander-legal and inside the commander's color identity, and must not already be in the deck. Pair each add with the card it replaces.
+Reply with only one JSON object:
+{"howToPlay":["4-6 short, specific piloting tips for this list"],"mulligan":"1-2 sentences on what to keep","swaps":[{"add":"card name","cut":"card in the deck","why":"one sentence"}],"styleShift":"1-2 sentences on one different direction this deck could go"}`,{modelTier:"default"}));
+    const sw=(Array.isArray(r.swaps)?r.swaps:[]).concat((Array.isArray(r.adds)?r.adds:[]).map(a=>({add:a.n||a.name||a.add,cut:a.replaces||a.cut,why:a.why}))).filter(x=>x&&(x.add||x.cut)).slice(0,10).map(x=>({add:String(x.add||x.in||""),cut:String(x.cut||x.out||""),why:String(x.why||x.reason||"")}));
+    const sugg={howToPlay:arr(r.howToPlay||r.tips||r.play,8),mulligan:String(r.mulligan||""),swaps:sw,styleShift:String(r.styleShift||r.style_shift||"")};
+    if(!sugg.howToPlay.length&&!sugg.swaps.length) throw {code:"no_sugg",message:"The AI's answer didn't include suggestions. Try again."};
+    setMeta(loc,{sugg,suggSig:deckSig(loc),suggAt:Date.now()});
+    if(LIVE&&sw.length) await liveTry(()=>scryNames(sw.map(x=>x.add).filter(Boolean)));
+  }catch(e){ if(!(e&&e.code==="cancelled")) DECKERR[loc]={part:"sugg",msg:errMsg(e)}; }
+  delete DECKBUSY[loc]; renderDecks();
+}
+async function openDeckInBuilder(loc, playtest){
+  const cmds=deckCommanders(loc), ck=new Set(cmds.map(key));
+  const text=cmds.map(n=>`1x ${n} [Commander{top}]`).concat(deckEntries(loc).filter(v=>!ck.has(key(v.n))).map(v=>`${v.q} ${v.n}`)).join("\n");
+  if(DIRTY && !confirmLeaveBuild()) return;
+  S.mode="import"; S.importText=text; showView("builder"); render(); $("importText").value=text;
+  await importDeck();
+  S.savedName=loc; $("deckName").value=loc; DIRTY=false; renderSaveBar();
+  if(playtest){ $("testSec").hidden=false; $("testSec").scrollIntoView({behavior:"smooth",block:"start"}); setTimeout(runPlaytest,60); }
+  else window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"});
+}
+let leaveAskedAt=0;
+function confirmLeaveBuild(){ if(Date.now()-leaveAskedAt<6000){ leaveAskedAt=0; return true; } leaveAskedAt=Date.now(); toast("Your current build has unsaved changes. Click again to replace it, or save it first."); return false; }
+const ago = t => { if(!t) return ""; const m=Math.round((Date.now()-t)/60000); return m<1?"just now":m<60?m+" min ago":m<1440?Math.round(m/60)+" h ago":new Date(t).toLocaleDateString(); };
+function bandStyle(cols){ const v=(cols.length?cols:["C"]).map(c=>`var(--m${c})`); return `background:${v.length===1?v[0]:`linear-gradient(90deg,${v.join(",")})`}`; }
+function renderDecks(){
+  const grid=$("deckGrid"); if(!grid) return;
+  const decks=decksList();
+  if(OPENDECK && !decks.some(d=>d.name===OPENDECK)) OPENDECK=null;
+  if(!decks.length){ grid.innerHTML=`<div class="empty" style="grid-column:1/-1">No decks yet. Choose <b>New deck…</b> under “Where are these cards?”, name it, then upload or paste its list.</div>`; $("deckDetail").innerHTML=""; return; }
+  grid.innerHTML=decks.map(d=>{ const m=DECKMETA[d.name]||{}, cmds=deckCommanders(d.name), cols=deckColors(d.name), st=deckStats(d.name);
+    const line=m.desc&&(m.desc.style||m.desc.summary.split(/(?<=\.)\s/)[0]);
+    return `<button type="button" class="decktile ${OPENDECK===d.name?"on":""}" data-deck="${esc(d.name)}" aria-pressed="${OPENDECK===d.name}">
+      <span class="dt-band" style="${bandStyle(cols)}"></span>
+      <span class="dt-name">${esc(d.name)}</span>
+      <span class="dt-cmd">${cmds.length?esc(cmds.join(" + ")):'<span class="muted">Commander not set</span>'}</span>
+      <span class="dt-row">${cols.length?colorPips(cols):""}<span class="dt-meta">${st.copies} card${st.copies===1?"":"s"}${st.copies===100?" · full deck":""}${st.priced?" · "+money(st.value):""}</span></span>
+      <span class="dt-sum">${line?esc(line):'<span class="muted">No write-up yet</span>'}</span>
+    </button>`; }).join("");
+  renderDeckDetail();
+}
+function renderDeckDetail(){
+  const el=$("deckDetail"); if(!el) return;
+  const loc=OPENDECK; if(!loc){ el.innerHTML=""; return; }
+  const m=DECKMETA[loc]||{}, cmds=deckCommanders(loc), cand=commanderCandidates(loc), cols=deckColors(loc), st=deckStats(loc), sig=deckSig(loc), busy=DECKBUSY[loc], err=DECKERR[loc];
+  const opts=(sel)=>cand.map(n=>`<option value="${esc(n)}" ${sel&&key(sel)===key(n)?"selected":""}>${esc(n)}</option>`).join("");
+  const cmdUi = cand.length ? `<label class="f">Commander<select data-dcmd="0"><option value="">Pick the commander…</option>${opts(cmds[0])}</select></label>
+      <label class="f">Partner (optional)<select data-dcmd="1"><option value="">No partner</option>${cand.filter(n=>!cmds[0]||key(n)!==key(cmds[0])).map(n=>`<option value="${esc(n)}" ${cmds[1]&&key(cmds[1])===key(n)?"selected":""}>${esc(n)}</option>`).join("")}</select></label>`
+    : `<div class="note">None of this deck's cards is a legal commander. Add your commander with “Where are these cards?” set to this deck.</div>`;
+  const d=m.desc, stale=d&&m.descSig!==sig, sg=m.sugg, sstale=sg&&m.suggSig!==sig;
+  const list=(t,a)=>a&&a.length?`<div><span class="eyebrow">${t}</span><ul>${a.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:"";
+  const descHtml = busy==="desc" ? '<div class="progress"><span class="dot"></span> Reading the deck and writing how it works…</div>'
+    : d ? `${stale?'<div class="warnbox small">The cards or commander changed since this was written. Regenerate to update it.</div>':""}
+      ${d.style?`<div class="dd-style">${esc(d.style)}</div>`:""}<p class="dd-sum">${esc(d.summary)}</p>
+      ${d.phases.length?`<div class="phase">${d.phases.map((p,i)=>`<div><span class="eyebrow">${["Early game","Mid game","Late game"][i]||"Then"}</span>${esc(String(p).replace(/^(early|mid|late)(\s*game)?:\s*/i,""))}</div>`).join("")}</div>`:""}
+      <div class="dd-cols">${list("Ways it wins",d.winCons)}${list("Key engines",d.engines)}${list("Strengths",d.strengths)}${list("Weak spots",d.weaknesses)}</div>
+      ${d.bracket?`<div class="small"><b>Estimated bracket ${d.bracket}.</b> ${esc(d.bracketWhy)}</div>`:""}
+      <div class="note">Written ${ago(m.descAt)}${m.descModel?" by "+esc(m.descModel):""}.</div>`
+    : '<p class="muted">No write-up yet. The AI reads the cards and explains the game plan, win conditions and weak spots.</p>';
+  const swapRow=x=>{ const ow=x.add&&owned(x.add), dd=x.add&&CARDDB[key(x.add)]; return `<li><span class="p">+ ${esc(x.add||"—")}</span>${ow?' <span class="tag own">Owned</span>':""}${dd&&dd.usd!=null?` <span class="muted small">${money(dd.usd)}</span>`:""}${x.cut?` <span class="m">− ${esc(x.cut)}</span>`:""}${x.why?`<div class="small muted">${esc(x.why)}</div>`:""}</li>`; };
+  const suggHtml = busy==="sugg" ? '<div class="progress"><span class="dot"></span> Working out how to pilot it and what to change…</div>'
+    : sg ? `${sstale?'<div class="warnbox small">The deck changed since these suggestions were made.</div>':""}
+      ${list("How to play it",sg.howToPlay)}
+      ${sg.mulligan?`<div><span class="eyebrow">Mulligan</span><p class="small" style="margin:4px 0">${esc(sg.mulligan)}</p></div>`:""}
+      ${sg.swaps.length?`<div><span class="eyebrow">Suggested changes</span><ul class="dd-swaps">${sg.swaps.map(swapRow).join("")}</ul></div>`:""}
+      ${sg.styleShift?`<div><span class="eyebrow">A different direction</span><p class="small" style="margin:4px 0">${esc(sg.styleShift)}</p></div>`:""}
+      <div class="note">Made ${ago(m.suggAt)}. Open the deck in the builder to try these with live prices and the bracket check.</div>`
+    : '<p class="muted">Get piloting tips, mulligan advice and specific swaps. Adds favor cards you already own.</p>';
+  el.innerHTML=`<div class="deckdetail">
+    <div class="dd-head"><span class="dt-band" style="${bandStyle(cols)}"></span>
+      <div class="dd-title"><span class="eyebrow">Deck</span><h3>${esc(loc)}</h3><div class="stats">${cols.length?`<span>${colorPips(cols)}</span>`:""}<span><b>${st.copies}</b> cards</span>${st.lands?`<span><b>${st.lands}</b> lands</span>`:""}${st.avgMv!=null?`<span>avg MV <b>${st.avgMv.toFixed(2)}</b></span>`:""}${st.gc?`<span><b>${st.gc}</b> Game Changer${st.gc>1?"s":""}</span>`:""}${st.priced?`<span>value <b>${money(st.value)}</b></span>`:""}</div></div>
+      <div class="dd-cmd">${cmdUi}</div>
+    </div>
+    ${st.copies!==100?`<div class="warnbox small">This deck has ${st.copies} cards; a Commander deck has 100 including the commander.</div>`:""}
+    ${err?`<div class="err small">${esc(err.msg)}</div>`:""}
+    <div class="row">
+      <button type="button" class="btn primary" data-dact="playtest">Playtest</button>
+      <button type="button" class="btn" data-dact="open">Open in deck builder</button>
+      <span class="sp" style="flex:1"></span>
+      <input type="text" data-dact-name value="${esc(loc)}" aria-label="Deck name" maxlength="80" style="width:180px">
+      <button type="button" class="btn small" data-dact="rename">Rename</button>
+      <button type="button" class="btn small ghost" data-dact="move">Move to general collection</button>
+      <button type="button" class="btn small ghost" data-dact="delete">Delete deck</button>
+    </div>
+    <div class="dd-panels">
+      <div class="dd-panel"><div class="dd-ph"><h4>How this deck works</h4><button type="button" class="btn small ${d&&!stale?"":"primary"}" data-dact="desc" ${busy||!sample?"disabled":""}>${d?"Regenerate description":"Describe this deck"}</button></div>${descHtml}</div>
+      <div class="dd-panel"><div class="dd-ph"><h4>Play style &amp; change suggestions</h4><button type="button" class="btn small ${sg&&!sstale?"":"primary"}" data-dact="sugg" ${busy||!sample?"disabled":""}>${sg?"Refresh suggestions":"Get suggestions"}</button></div>${suggHtml}</div>
+    </div>
+    ${!sample?'<div class="note">Descriptions and suggestions need an AI engine; set one up under AI engine in the deck builder.</div>':""}
+  </div>`;
 }
 
 // ---------- spreadsheet parsing ----------
@@ -1923,15 +2106,29 @@ $("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:
 $("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); basicsList().forEach(([b,k])=>list.push({n:b,q:k})); const loc=(defaultDeckName()||"Imported deck").replace(/ \(imported\)$/,""); const all=aggregate(list); const undo=collAddMany(all,"replace",loc); toast(`Saved ${cardCount(all)} as deck “${loc}” in your collection.`,{label:"Undo",fn:undo}); });
 $("collDest").addEventListener("change",()=>{ $("collDestName").hidden=$("collDest").value!=="__new"; if(!$("collDestName").hidden) $("collDestName").focus(); if(pendingUpload) $("upPreview").querySelector&&($("upPreview").querySelector("#upAdd")||{}).textContent!==undefined&&($("upPreview").querySelector("#upAdd").textContent="Add to "+destName()); });
 $("collDestName").addEventListener("input",()=>{ if(pendingUpload&&$("upPreview").querySelector){ const b=$("upPreview").querySelector("#upAdd"); if(b) b.textContent="Add to "+destName(); } });
-$("collLoc").addEventListener("change",()=>{ collLimit=150; renderCollection(); });
-$("locActions").addEventListener("click",e=>{
-  const loc=$("collLoc").value; if(!loc||loc==="*"||loc==="__gen") return;
-  const b=e.target.closest("button"); if(!b) return;
-  if(b.id==="locOpen"){ const text=[...COLL.values()].filter(v=>v.loc===loc).map(v=>`${v.q} ${v.n}`).join("\n"); S.mode="import"; S.importText=text; showView("builder"); render(); $("importText").value=text; importDeck().then(()=>{ S.savedName=loc; $("deckName").value=loc; renderSaveBar(); }); window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"}); return; }
-  if(b.id==="locMove"){ const undo=moveLocation(loc,""); $("collLoc").value="*"; renderCollection(); toast(`Moved “${loc}” into your general collection.`,{label:"Undo",fn:undo}); return; }
-  if(b.id==="locDelete"){ if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to delete “${loc}” and its cards`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete this deck"; } },4000); return; } b.dataset.confirm=""; b.textContent="Delete this deck"; const undo=deleteLocation(loc); $("collLoc").value="*"; renderCollection(); toast(`Deleted “${loc}”.`,{label:"Undo",fn:undo}); }
+$("collLoc").addEventListener("change",()=>{ collLimit=150; const v=$("collLoc").value; if(v!=="*"&&v!=="__gen"){ OPENDECK=v; loadDeckData(v); } renderCollection(); });
+$("deckGrid").addEventListener("click",e=>{
+  const t=e.target.closest("[data-deck]"); if(!t) return; const loc=t.dataset.deck;
+  OPENDECK = OPENDECK===loc ? null : loc;
+  $("collLoc").value = OPENDECK || "*"; collLimit=150; renderCollection();
+  if(OPENDECK){ loadDeckData(loc); const dd=$("deckDetail"); dd.scrollIntoView&&dd.scrollIntoView({behavior:"smooth",block:"nearest"}); }
 });
-
+$("deckDetail").addEventListener("change",e=>{
+  const sel=e.target.closest("[data-dcmd]"); if(!sel||!OPENDECK) return;
+  const cur=deckCommanders(OPENDECK).slice(); const i=Number(sel.dataset.dcmd);
+  if(i===0){ cur[0]=sel.value; if(!sel.value) cur.length=0; } else { if(sel.value) cur[1]=sel.value; else cur.length=Math.min(cur.length,1); }
+  setMeta(OPENDECK,{commanders:cur.filter(Boolean)}); loadDeckData(OPENDECK); toast(cur.filter(Boolean).length?`Commander set to ${cur.filter(Boolean).join(" + ")}.`:"Commander cleared.");
+});
+$("deckDetail").addEventListener("click",e=>{
+  const b=e.target.closest("[data-dact]"); if(!b||!OPENDECK) return; const loc=OPENDECK, act=b.dataset.dact;
+  if(act==="playtest") return openDeckInBuilder(loc,true);
+  if(act==="open") return openDeckInBuilder(loc,false);
+  if(act==="desc") return describeDeck(loc);
+  if(act==="sugg") return suggestDeck(loc);
+  if(act==="rename"){ const inp=$("deckDetail").querySelector("[data-dact-name]"); const to=(inp&&inp.value||"").trim(); if(!to||to===loc) return; if(decksList().some(d=>d.name===to)){ toast(`There's already a deck called “${to}”. Pick another name.`); return; } const undo=renameDeck(loc,to); renderCollection(); toast(`Renamed to “${to}”.`,{label:"Undo",fn:()=>{ undo(); if(DECKMETA[to]){ DECKMETA[loc]=DECKMETA[to]; delete DECKMETA[to]; persistMeta(); } OPENDECK=loc; renderCollection(); }}); return; }
+  if(act==="move"){ const undo=moveLocation(loc,""); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Moved “${loc}” into your general collection.`,{label:"Undo",fn:undo}); return; }
+  if(act==="delete"){ if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="Click again to delete it"; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete deck"; } },4000); return; } const undo=deleteLocation(loc); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Deleted “${loc}”.`,{label:"Undo",fn:undo}); }
+});
 // ---------- save / discard ----------
 $("saveDeck").addEventListener("click",saveDeck);
 $("discardDeck").addEventListener("click",discardDeck);
@@ -1973,7 +2170,7 @@ function loadInitial(){
   S=fresh("new"); S.bracket=Number(prefs.bracket)||3; S.budget=prefs.budget!=null?Number(prefs.budget):500; S.fmt=prefs.fmt||"archidekt";
 }
 function savePrefs(){ try{ localStorage.setItem("cforge.prefs",JSON.stringify({bracket:S.bracket,budget:S.budget,fmt:S.fmt})); }catch(e){} }
-loadCollLocal(); loadInitial(); mcp=undefined; render(); renderCollection(); renderPrecons(); renderCombos();
+loadCollLocal(); loadMetaLocal(); loadInitial(); mcp=undefined; render(); renderCollection(); renderPrecons(); renderCombos();
 preconsReady.then(()=>{ renderPrecons(); renderCommander(); });
 try{ const v=(location.hash||"").replace("#","")||sessionStorage.getItem("cforge.view"); if(v==="collection") showView("collection"); }catch(e){}
 if (window.claude && window.claude.use){
