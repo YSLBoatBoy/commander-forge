@@ -1325,19 +1325,18 @@ async function handleFile(file){
       wb.SheetNames.forEach(sn=>{ const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,defval:""}); const p=rowsToCards(rows); p.sheet=sn; if(!best||p.cards.length>best.cards.length) best=p; });
       parsed=best;
     }
-    const cards=aggregate(parsed.cards.filter(c=>!BASIC_NAMES.test(c.n)));
-    const basics=parsed.cards.filter(c=>BASIC_NAMES.test(c.n)).reduce((a,c)=>a+c.q,0);
+    const cards=aggregate(parsed.cards);
     if(!cards.length){ el.innerHTML='<div class="err">No cards found in that file. It needs a column of card names (ideally headed “Name”) and, optionally, a quantity column.</div>'; return; }
     pendingUpload=cards;
     const copies=cards.reduce((a,c)=>a+c.q,0);
     const already=cards.filter(c=>owned(c.n)).length;
-    el.innerHTML = `<div class="prev"><div><b>${cards.length.toLocaleString()} different cards</b> (${copies.toLocaleString()} copies) found in ${esc(file.name)}${parsed.sheet?" · sheet “"+esc(parsed.sheet)+"”":""}, using ${esc(parsed.how)}.${basics?` Skipped ${basics} basic lands.`:""}${already&&COLL.size?` ${already} are already in your collection.`:""}</div>
+    el.innerHTML = `<div class="prev"><div><b>${cards.length.toLocaleString()} different cards</b> (${copies.toLocaleString()} copies) found in ${esc(file.name)}${parsed.sheet?" · sheet “"+esc(parsed.sheet)+"”":""}, using ${esc(parsed.how)}.${already&&COLL.size?` ${already} are already in your collection.`:""}</div>
       <div class="prevtbl"><table><thead><tr><th>Qty</th><th>Name</th></tr></thead><tbody>${cards.slice(0,8).map(c=>`<tr><td>${c.q}</td><td>${esc(c.n)}</td></tr>`).join("")}${cards.length>8?`<tr><td></td><td class="muted">and ${(cards.length-8).toLocaleString()} more</td></tr>`:""}</tbody></table></div>
       <div class="row"><button type="button" class="btn primary small" id="upAdd">${COLL.size?"Add to my collection":"Save as my collection"}</button>${COLL.size?`<button type="button" class="btn small" id="upReplace">Replace my collection with this file</button>`:""}<button type="button" class="btn small ghost" id="upCancel">Cancel</button></div>
       ${COLL.size?'<span class="note">Add increases counts for cards you already have. Replace clears your current list first, which is right if this file is a full export of everything you own.</span>':""}</div>`;
   }catch(e){ el.innerHTML='<div class="err">That file couldn\'t be read. Save it as .xlsx or .csv and try again.</div>'; }
 }
-function parsePasted(text){ return aggregate(String(text).split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{ const m=l.match(/^(\d+)\s*x?\s+(.+)$/i); return m?{n:cleanName(m[2]),q:Number(m[1])}:{n:cleanName(l),q:1}; }).filter(c=>c.n&&!BASIC_NAMES.test(c.n))); }
+function parsePasted(text){ return aggregate(String(text).split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{ const m=l.match(/^(\d+)\s*x?\s+(.+)$/i); return m?{n:cleanName(m[2]),q:Number(m[1])}:{n:cleanName(l),q:1}; }).filter(c=>c.n)); }
 
 // ---------- add-card suggestions ----------
 const AC2={items:[],active:-1,seq:0}; let ac2T=null;

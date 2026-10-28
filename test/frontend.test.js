@@ -65,7 +65,7 @@ test("reads collection spreadsheets from common apps", () => {
   const manabox = T.rowsToCards([["Name", "Set code", "Quantity"], ["Smothering Tithe", "RNA", "3"]]);
   assert.deepEqual(plain(manabox.cards), [{ n: "Smothering Tithe", q: 3 }]);
   assert.deepEqual(plain(T.rowsToCards([["4", "Brainstorm"], ["1", "Ponder"]]).cards), [{ n: "Brainstorm", q: 4 }, { n: "Ponder", q: 1 }]);
-  assert.deepEqual(plain(T.parsePasted("2x Opt\nCounterspell\n10 Island")), [{ n: "Opt", q: 2 }, { n: "Counterspell", q: 1 }]);
+  assert.deepEqual(plain(T.parsePasted("2x Opt\nCounterspell\n10 Island")), [{ n: "Opt", q: 2 }, { n: "Counterspell", q: 1 }, { n: "Island", q: 10 }]);
 });
 
 test("owned cards are free toward the budget", () => {
