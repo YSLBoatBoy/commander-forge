@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -240,4 +240,27 @@ test("decks in the collection: commander pick, colors, write-ups that know when 
   T.renameDeck("Izzet", "Vivi Storm");
   assert.ok(T.DECKMETA["Vivi Storm"].desc && !T.DECKMETA.Izzet);
   assert.equal(T.decksList()[0].name, "Vivi Storm");
+});
+
+test("cards you own: finds owned cards that fit, rates them, and swaps one in", async () => {
+  const { T } = loadPage();
+  T.loadExample(); T.S.example = false;
+  await new Promise((r) => setImmediate(r));
+  T.S.edh = { pool: [{ n: "Mystic Remora", inc: 40, syn: 25 }, { n: "Sol Ring", inc: 90, syn: 0 }], themes: [] };
+  T.collAddMany([{ n: "Mystic Remora", q: 1 }, { n: "Sol Ring", q: 1 }, { n: "Grizzly Bears", q: 2 }], "add", "");
+  const cand = T.ownedCandidates().map((x) => x.n);
+  assert.ok(cand.includes("Mystic Remora"));
+  assert.ok(!cand.includes("Sol Ring"), "cards already in the deck aren't suggested");
+  const fake = () => Promise.resolve({ text: "" });
+  fake.json = async () => ({ cards: [{ n: "Mystic Remora", verdict: "use", why: "Cheap early draw.", replace: "Night's Whisper", c: "draw" }, { n: "Grizzly Bears", verdict: "skip", why: "Off plan." }] });
+  T.setSample(fake);
+  await T.checkOwned();
+  const items = T.S.ownCheck.items;
+  assert.equal(items.find((x) => x.n === "Mystic Remora").verdict, "use");
+  assert.ok(!items.some((x) => x.n === "Grizzly Bears"), "cards the AI couldn't safely judge (no color data) aren't sent or kept");
+  const before = T.deckCount();
+  T.useOwned("Mystic Remora", "Night's Whisper");
+  assert.ok(T.S.cards.find((c) => c.n === "Mystic Remora").sel);
+  assert.ok(!T.S.cards.find((c) => c.n === "Night's Whisper").sel);
+  assert.equal(T.deckCount(), before);
 });

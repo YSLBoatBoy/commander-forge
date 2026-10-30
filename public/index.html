@@ -111,8 +111,14 @@
     <div id="pool"><div class="empty">Your recommendations will appear here, grouped by role.</div></div>
   </section>
 
+  <section class="step" aria-labelledby="hOwn" id="ownSec" hidden>
+    <div class="step-h"><span class="num">5</span><h2 id="hOwn">Cards you own</h2><span class="hint">Which cards from your collection are worth putting in this deck.</span></div>
+    <div class="row"><button class="btn primary" id="ownBtn" type="button">Check my collection</button><span id="ownStatus" class="progress"></span></div>
+    <div id="ownOut" style="display:grid;gap:4px"></div>
+  </section>
+
   <section class="step" aria-labelledby="h5" id="refineSec">
-    <div class="step-h"><span class="num">5</span><h2 id="h5">Anything you'd like to see added?</h2><span class="hint">Ask for changes in plain words. You'll see the proposed adds and cuts before anything changes.</span></div>
+    <div class="step-h"><span class="num">6</span><h2 id="h5">Anything you'd like to see added?</h2><span class="hint">Ask for changes in plain words. You'll see the proposed adds and cuts before anything changes.</span></div>
     <div class="examples" id="refineExamples">
       <button type="button" id="splurgeChip">I have enough to add a couple of expensive cards. Give me some suggestions</button>
       <button type="button">Add more ramp</button>
@@ -128,13 +134,13 @@
   </section>
 
   <section class="step" aria-labelledby="h6" id="comboSec">
-    <div class="step-h"><span class="num">6</span><h2 id="h6">Combos</h2><span class="hint">From Commander Spellbook: combos already in your deck, and ones you're one card away from.</span></div>
+    <div class="step-h"><span class="num">7</span><h2 id="h6">Combos</h2><span class="hint">From Commander Spellbook: combos already in your deck, and ones you're one card away from.</span></div>
     <div class="row"><button class="btn primary" id="comboBtn" type="button">Find combos</button><span id="comboStatus" class="progress"></span></div>
     <div id="comboOut"></div>
   </section>
 
   <section class="step" aria-labelledby="h7" id="testSec">
-    <div class="step-h"><span class="num">7</span><h2 id="h7">Playtest</h2><span class="hint">Plays the first six turns of many games, then tells you what to change.</span></div>
+    <div class="step-h"><span class="num">8</span><h2 id="h7">Playtest</h2><span class="hint">Plays the first six turns of many games, then tells you what to change.</span></div>
     <div class="row">
       <button class="btn primary" id="ptRun" type="button">Run playtest</button>
       <label class="toggle">Games <select id="ptN" aria-label="Number of games"><option value="100">100</option><option value="1000" selected>1,000</option><option value="5000">5,000</option></select></label>
@@ -153,7 +159,7 @@
   </section>
 
   <section class="step" aria-labelledby="h8" id="saveSec">
-    <div class="step-h"><span class="num">8</span><h2 id="h8">Save or discard</h2><span class="hint" id="saveHint">This deck clears when you leave the site unless you save it.</span></div>
+    <div class="step-h"><span class="num">9</span><h2 id="h8">Save or discard</h2><span class="hint" id="saveHint">This deck clears when you leave the site unless you save it.</span></div>
     <div class="row">
       <input id="deckName" type="text" class="grow" placeholder="Deck name" aria-label="Deck name" maxlength="120">
       <button class="btn primary" id="saveDeck" type="button">Save deck</button>

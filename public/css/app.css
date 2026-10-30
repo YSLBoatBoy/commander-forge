@@ -279,6 +279,17 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .pt-fix.bad{border-left:3px solid var(--bad)} .pt-fix.warn{border-left:3px solid var(--warn)}
 .pt-swap{display:flex;gap:8px;align-items:flex-start;font-size:.9rem}
 .pt-swap .p{color:var(--ok);font-weight:700} .pt-swap .m{color:var(--bad);font-weight:700}
+/* cards you own */
+.ownrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;align-items:start;padding:10px 8px;border-radius:var(--r);border-left:3px solid transparent}
+.ownrow:hover{background:var(--sunk)}
+.ownrow.use{border-left-color:var(--ok)} .ownrow.maybe{border-left-color:var(--warn)} .ownrow.skip{border-left-color:var(--line);opacity:.85}
+.verdict-chip{font:500 .72rem/1.4 var(--f-mono);border-radius:4px;padding:1px 6px}
+.verdict-chip.use{background:var(--ok-soft);color:var(--ok)} .verdict-chip.maybe{background:var(--warn-soft);color:var(--warn)} .verdict-chip.skip{background:var(--sunk);color:var(--muted)}
+.owngroups{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.owng{font:700 1.15rem var(--f-display);margin:4px 0;display:flex;gap:8px;align-items:baseline}
+.owng.use{color:var(--ok)} .owng.maybe{color:var(--warn)}
+.owng .cnt{font:500 .8rem var(--f-mono);color:var(--muted)}
+.ownskip summary{cursor:pointer;color:var(--muted);font-size:.9rem;padding:6px 0}
 /* deck shelf */
 .deckgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .decktile{position:relative;overflow:hidden;text-align:left;display:grid;gap:4px;align-content:start;padding:18px 16px 14px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg);cursor:pointer;min-width:0;transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease}

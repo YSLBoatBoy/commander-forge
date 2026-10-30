@@ -495,7 +495,7 @@ function renderDeck(){
   else if(bad){ v.className="verdict bad"; v.textContent=`Breaks bracket ${S.bracket}. Fix the red items.`; }
   else if(warn){ v.className="verdict warn"; v.textContent=`Fits bracket ${S.bracket}, with notes below.`; }
   else { v.className="verdict ok"; v.textContent = fits<S.bracket? `Fits bracket ${S.bracket}. By the rules alone it also qualifies for bracket ${fits}; power level decides.` : `Fits bracket ${S.bracket}.`; }
-  renderExport(); renderSaved(); renderShop(); renderOwnedToggles(); renderMana(); renderOdds();
+  renderExport(); renderSaved(); renderShop(); renderOwnedToggles(); renderMana(); renderOdds(); renderOwnCheck();
 }
 function exportText(){
   const ar=S.fmt!=="moxfield", L=[];
@@ -534,7 +534,7 @@ function renderLive(){
   $("liveNote").hidden = LIVE || mcp===undefined;
   $("refreshBtn").hidden = !LIVE;
 }
-function render(){ renderMode(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); renderSaveBar(); }
+function render(){ renderMode(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); renderSaveBar(); renderOwnCheck(); }
 function save(){
   if(S.example){ S.example=false; $("exampleBanner").hidden=true; }   // once you change the example, it's your deck
   if(S.commanders.length || S.cards.length) DIRTY=true;
@@ -1589,6 +1589,97 @@ function ac2Update(){
 }
 function ac2Pick(i){ const n=AC2.items[i]; if(!n) return; $("addName").value=n; AC2.items=[]; ac2Render(); }
 
+// ================= cards you own (builder) =================
+// S.ownCheck = {sig, at, model, items:[{n, verdict:"use"|"maybe"|"skip", why, replace, c}]}
+let OWNBUSY=false, OWNERR="", ownShowAll=false;
+function buildSig(){ return hashStr(S.cards.filter(c=>c.sel).map(c=>key(c.n)).sort().join("|")+"#"+S.commanders.map(c=>key(c.name)).join("+")+"#"+S.bracket); }
+// Owned cards that aren't in the current build and could legally go in it. EDHREC picks for this commander first.
+function ownedCandidates(){
+  if(!COLL.size||!S.commanders.length) return [];
+  const inDeck=new Set(S.cards.filter(c=>c.sel).map(c=>key(c.n))); S.commanders.forEach(c=>inDeck.add(key(c.name)));
+  const seen=new Set(), out=[];
+  for(const e of BYNAME.values()){
+    const k=key(e.n); if(seen.has(k)) continue; seen.add(k);
+    if(inDeck.has(k)||inDeck.has(k.split(" // ")[0])||BASIC_NAMES.test(e.n)) continue;
+    const d=CARDDB[k];
+    if(d && (d.legal!=="legal" || d.ci.some(x=>!S.colors.includes(x)))) continue;
+    const p=S.edh&&S.edh.pool.find(x=>key(x.n)===k);
+    out.push({n:e.n, own:e, d, edh:p||null});
+  }
+  return out.sort((a,b)=>((b.edh?1:0)-(a.edh?1:0)) || ((b.edh&&b.edh.inc||0)+(b.edh&&b.edh.syn||0)) - ((a.edh&&a.edh.inc||0)+(a.edh&&a.edh.syn||0)) || a.n.localeCompare(b.n));
+}
+async function checkOwned(){
+  if(needClaude()) return;
+  if(!S.commanders.length||!S.cards.some(c=>c.sel)){ toast("Build or import a deck first."); return; }
+  OWNBUSY=true; OWNERR=""; renderOwnCheck();
+  try{
+    let cand=ownedCandidates();
+    if(LIVE){ await liveTry(()=>scryNames(cand.slice(0,400).map(x=>x.n)), $("ownStatus")); cand=ownedCandidates(); }
+    // Without card data, only cards EDHREC links to this commander are known to fit its colors.
+    const known=cand.filter(x=>x.d||x.edh).slice(0,120);
+    if(!known.length){ OWNERR=cand.length?"Couldn't check your cards' colors without live card data, so there's nothing safe to suggest.":"Nothing in your collection fits this deck that isn't already in it."; OWNBUSY=false; renderOwnCheck(); return; }
+    const deck=S.cards.filter(c=>c.sel).map(c=>`${c.n} (${c.c})`).join("; ");
+    const lines=known.map(x=>`${x.n}${x.d?` | ${x.d.type}${x.d.mana?" "+x.d.mana:""}`:""}${x.edh?` | in ${x.edh.inc!=null?x.edh.inc+"%":"?"} of EDHREC decks, ${x.edh.syn>=0?"+":""}${x.edh.syn}% synergy`:""}`).join("\n");
+    const r=firstObj(await sample.json(`You are an expert Magic: The Gathering Commander deckbuilder. The player wants to know which cards they ALREADY OWN are worth putting in this deck.
+${ctx()}
+CURRENT DECK: ${deck}
+
+CARDS THE PLAYER OWNS THAT AREN'T IN THE DECK (name | type | EDHREC stats | notes):
+${lines}
+
+For EVERY owned card listed, decide: "use" (clearly improves this deck; would make the cut), "maybe" (reasonable, depends on taste or meta), or "skip" (not worth a slot here). Judge against the actual cards in the deck and the bracket rules. For "use" and "maybe", name the weakest card in the CURRENT DECK it should replace.
+Reply with only one JSON object: {"cards":[{"n":"exact owned card name","verdict":"use|maybe|skip","why":"max 22 words, specific to this deck","replace":"exact card name from the current deck, or empty","c":"payoff|engine|ramp|draw|removal|wipe|protection|land"}]}`,{modelTier:"default"}));
+    const list=(Array.isArray(r.cards)?r.cards:Array.isArray(r)?r:[]).filter(x=>x&&x.n);
+    const byName=new Map(known.map(x=>[key(x.n),x.n]));
+    const items=list.map(x=>({n:byName.get(key(x.n))||String(x.n),verdict:/^use|yes|worth/i.test(x.verdict)?"use":/^skip|no|not/i.test(x.verdict)?"skip":"maybe",why:String(x.why||x.reason||""),replace:String(x.replace||x.cut||""),c:CATNAME[x.c]?x.c:catGuess(CARDDB[key(x.n)])})).filter(x=>byName.has(key(x.n)));
+    if(!items.length) throw {code:"no_items",message:"The AI's answer didn't rate any of your cards. Try again."};
+    S.ownCheck={sig:buildSig(),at:Date.now(),model:(LAST_AI&&LAST_AI.model)||"",items}; save();
+  }catch(e){ if(!(e&&e.code==="cancelled")) OWNERR=errMsg(e); }
+  OWNBUSY=false; renderOwnCheck();
+}
+function useOwned(n, replace){
+  const d=CARDDB[key(n)], it=S.ownCheck&&S.ownCheck.items.find(x=>key(x.n)===key(n)), p=S.edh&&S.edh.pool.find(x=>key(x.n)===key(n));
+  let c=S.cards.find(x=>key(x.n)===key(n));
+  if(!c) c=addCard({n,c:(it&&it.c)||catGuess(d),mv:d?d.mv:0,s:it&&it.verdict==="use"?8:6,usd:d?d.usd:null,w:(it&&it.why)||(p?`You own it, and it's in ${p.inc}% of decks for this commander on EDHREC.`:"From your collection.")},{o:"added"});
+  if(!c) return;
+  const br=blockReason(c)||(gcLimitHit(Object.assign({},c,{sel:false}))?"the Game Changer limit for this bracket":"");
+  if(br){ toast(`${n} can't go in: ${br}.`); return; }
+  c.sel=true;
+  let out=null; if(replace){ out=S.cards.find(x=>x.sel&&key(x.n)===key(replace)); if(out) out.sel=false; }
+  toast(`Added ${n}${out?` in place of ${out.n}`:""}.`+(!out&&deckCount()>mainSize()?" You're over 99 now, so cut a card.":""));
+  renderPool(); renderDeck(); save();
+}
+function renderOwnCheck(){
+  const sec=$("ownSec"); if(!sec) return;
+  sec.hidden = !S.cards.length || !COLL.size || !S.commanders.length;
+  if(sec.hidden) return;
+  const cand=ownedCandidates(), oc=S.ownCheck, stale=oc&&oc.sig!==buildSig();
+  const btn=$("ownBtn"); btn.disabled=OWNBUSY||!sample; btn.textContent=oc?"Check again":"Check my collection";
+  $("ownStatus").innerHTML = OWNBUSY ? '<span class="dot"></span> Comparing your cards with this deck…' : OWNERR ? `<span class="err small">${esc(OWNERR)}</span>` : "";
+  const ownLabel=x=>{ const o=owned(x.n); return `<span class="tag own" title="${esc(o.locs.map(l=>l.q+" in "+(l.loc||"general collection")).join(", "))}">Owned${o.q>1?" ×"+o.q:""}</span>`; };
+  const statLine=x=>{ const p=x.edh||(S.edh&&S.edh.pool.find(e=>key(e.n)===key(x.n))), d=CARDDB[key(x.n)]; return [p&&p.inc!=null?`in ${p.inc}% of decks`:"", p?`${p.syn>=0?"+":""}${p.syn}% synergy`:"", d&&d.usd!=null?money(d.usd):""].filter(Boolean).join(" · "); };
+  const inDeckNow=n=>S.cards.some(c=>c.sel&&key(c.n)===key(n));
+  const row=(x,v)=>{ const added=inDeckNow(x.n); return `<div class="ownrow ${v||""}"><div style="min-width:0"><div class="nmrow"><span class="nm"><a href="${sfUrl(x.n)}" target="_blank" rel="noopener">${esc(x.n)}</a></span>${ownLabel(x)}${v?`<span class="verdict-chip ${v}">${v==="use"?"Worth using":v==="maybe"?"Maybe":"Not worth it"}</span>`:""}</div>${x.why?`<div class="why">${esc(x.why)}</div>`:""}<div class="edh">${esc(statLine(x))}${x.replace&&v!=="skip"?` · would replace <b>${esc(x.replace)}</b>`:""}</div>${oracleHTML(x.n)}</div>
+    <div>${added?'<span class="tag info">In the deck</span>':v==="skip"?"":`<button type="button" class="btn small ${v==="use"?"primary":""}" data-own="${esc(x.n)}" data-rep="${esc(v&&x.replace||"")}">${v&&x.replace&&inDeckNow(x.replace)?"Swap in":"Add"}</button>`}</div></div>`; };
+  let html="";
+  if(oc&&oc.items.length){
+    const g=v=>oc.items.filter(x=>x.verdict===v);
+    html += `${stale?'<div class="warnbox small">Your deck changed since this check. Run it again for up-to-date advice.</div>':""}
+      <div class="owngroups">
+        <div><h3 class="owng use">Worth using <span class="cnt">${g("use").length}</span></h3>${g("use").map(x=>row(x,"use")).join("")||'<div class="note">None of your cards clearly beat what\'s in the deck.</div>'}</div>
+        <div><h3 class="owng maybe">Maybe <span class="cnt">${g("maybe").length}</span></h3>${g("maybe").map(x=>row(x,"maybe")).join("")||'<div class="note">Nothing borderline.</div>'}</div>
+      </div>
+      ${g("skip").length?`<details class="ownskip"><summary>Not worth it here (${g("skip").length})</summary>${g("skip").map(x=>row(x,"skip")).join("")}</details>`:""}
+      <div class="note">Checked ${oc.items.length} of your cards ${ago(oc.at)}${oc.model?" with "+esc(oc.model):""}.</div>`;
+  } else {
+    const pop=cand.filter(x=>x.edh);
+    const shown=ownShowAll?pop:pop.slice(0,8);
+    html += pop.length ? `<div class="note">You own <b>${pop.length}</b> card${pop.length===1?"":"s"} that EDHREC players run with ${esc(S.commanders[0].name.split(",")[0])} and aren't in this deck${cand.length>pop.length?`, plus ${cand.length-pop.length} more in your collection the AI can weigh up`:""}.</div>${shown.map(x=>row(x,"")).join("")}${pop.length>8?`<button type="button" class="btn small ghost" id="ownMore">${ownShowAll?"Show fewer":`Show all ${pop.length}`}</button>`:""}`
+      : `<div class="note">${cand.length?`You own ${cand.length} card${cand.length===1?"":"s"} that could go in this deck. Click <b>Check my collection</b> and the AI will say which are worth a slot.`:"Nothing in your collection fits this deck that isn't already in it."}</div>`;
+  }
+  $("ownOut").innerHTML=html;
+}
+
 // ================= MTGJSON precons =================
 let PRE={n:[],d:[]};
 function loadJsonData(id,file,apply){
@@ -2129,6 +2220,10 @@ $("deckDetail").addEventListener("click",e=>{
   if(act==="move"){ const undo=moveLocation(loc,""); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Moved “${loc}” into your general collection.`,{label:"Undo",fn:undo}); return; }
   if(act==="delete"){ if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="Click again to delete it"; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete deck"; } },4000); return; } const undo=deleteLocation(loc); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Deleted “${loc}”.`,{label:"Undo",fn:undo}); }
 });
+// ---------- cards you own ----------
+$("ownBtn").addEventListener("click",checkOwned);
+$("ownOut").addEventListener("click",e=>{ if(e.target.id==="ownMore"){ ownShowAll=!ownShowAll; renderOwnCheck(); return; } const b=e.target.closest("[data-own]"); if(b) useOwned(b.dataset.own,b.dataset.rep); });
+
 // ---------- save / discard ----------
 $("saveDeck").addEventListener("click",saveDeck);
 $("discardDeck").addEventListener("click",discardDeck);
