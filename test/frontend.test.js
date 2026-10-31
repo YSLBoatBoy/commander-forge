@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -281,13 +281,14 @@ test("sort by color groups cards by color identity", () => {
 });
 
 test("surprise me: spins one of your commanders and drafts only owned cards", async () => {
-  const { T } = loadPage();
+  const { T, els } = loadPage();
   await new Promise((r) => setImmediate(r));
   T.setLive(true);
   T.putCard({ name: "Vivi Ornitier", ci: ["U", "R"], type: "Legendary Creature — Wizard", legal: "legal", mv: 2, mana: "{U}{R}", text: "Vivi text" });
   const owned = [{ n: "Vivi Ornitier", q: 1 }];
   for (let i = 0; i < 60; i++) { const n = "Spell " + i; owned.push({ n, q: 1 }); T.putCard({ name: n, ci: ["U"], type: "Instant", legal: "legal", mv: 2, usd: 1 }); }
   owned.push({ n: "Off Color", q: 1 }); T.putCard({ name: "Off Color", ci: ["G"], type: "Instant", legal: "legal", mv: 1 });
+  owned.push({ n: "Spare Owned", q: 1 }); T.putCard({ name: "Spare Owned", ci: ["R"], type: "Sorcery", legal: "legal", mv: 3, usd: 2 });
   T.collAddMany(owned, "add", "");
   assert.deepEqual(plain(T.ownedCommanders()), ["Vivi Ornitier"]);
   assert.ok(!T.ownedPoolFor(["U", "R"], ["Vivi Ornitier"]).some((x) => x.n === "Off Color"));
@@ -313,4 +314,12 @@ test("surprise me: spins one of your commanders and drafts only owned cards", as
   assert.ok(!("Forest" in T.S.basics), "no off-color basics");
   assert.equal(T.S.spin.bracket, 2);
   assert.equal(T.S.gameplans[0].name, "Blue Tide");
+  // "Anything you'd like to see added?" stays owned-only for a surprise deck
+  let rprompt = "";
+  fake.json = async (input) => { rprompt = input; return { reply: "ok", add: [{ n: "Spare Owned", c: "payoff" }, { n: "Sol Ring", c: "ramp" }, { n: "Spell 3", c: "draw" }], cut: [{ n: "Spell 5" }] }; };
+  els.refineText = { value: "add more ramp", focus() {} };
+  await T.refine();
+  assert.ok(rprompt.includes("Spare Owned") && !rprompt.includes("Off Color") && !rprompt.includes("BUDGET"), "prompt lists only unused owned cards");
+  assert.deepEqual(plain(T.S.refine.add.map((a) => a.n)), ["Spare Owned"]);
+  assert.match(T.S.refine.note, /Sol Ring/);
 });

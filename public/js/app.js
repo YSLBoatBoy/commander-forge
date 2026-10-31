@@ -473,7 +473,7 @@ function renderRefine(){
   const r=S.refine; const el=$("refineOut");
   if(!r){ el.innerHTML=""; return; }
   const items=[...(r.add||[]).map((a,i)=>({k:"a"+i,what:"add",...a})),...(r.cut||[]).map((a,i)=>({k:"c"+i,what:"cut",...a}))];
-  el.innerHTML = `<div class="reply">${esc(r.reply||"")}</div>` + (items.length&&!r.applied? `<div>${items.map(it=>{
+  el.innerHTML = `<div class="reply">${esc(r.reply||"")}</div>` + (r.note?`<div class="note" style="margin:6px 0">${esc(r.note)}</div>`:"") + (items.length&&!r.applied? `<div>${items.map(it=>{
       const d=CARDDB[key(it.n)]; const cur=S.cards.find(c=>key(c.n)===key(it.n));
       const px = it.what==="add" ? (d?priceTxt(d.usd,true):it.usd!=null?priceTxt(it.usd,false):"") : (cur&&cur.usd!=null?priceTxt(cur.usd,cur.live):"");
       const bad = it.what==="add" && d && (d.legal!=="legal"||d.ci.some(x=>!S.colors.includes(x)));
@@ -1106,6 +1106,11 @@ function toggleSwap(c,on){
 }
 
 // ---------- Refine ----------
+// Owned cards not already in the deck that fit its colors (for Surprise me decks), keyed by card key.
+function refineOwnedPool(inDeck){
+  const rank=new Map(((S.edh&&S.edh.pool)||[]).map(p=>[key(p.n),(p.inc||0)+p.syn*1.5]));
+  return new Map(ownedPoolFor(S.colors, inDeck).map(x=>({...x,edh:rank.has(key(x.n)),r:rank.get(key(x.n))??-999})).sort((a,b)=>b.r-a.r||a.n.localeCompare(b.n)).slice(0,400).map(x=>[key(x.n),x]));
+}
 async function refine(){
   if(needClaude()) return;
   const req=$("refineText").value.trim(); if(!req){ $("refineText").focus(); return; }
@@ -1113,8 +1118,22 @@ async function refine(){
   const ctl=new AbortController(); running=[ctl];
   try{
     const open=mainSize()-deckCount();
-    const r=await sample.json(`${ctx()}\nBUDGET: ${S.budget?"$"+S.budget+(S.mode==="import"?" for upgrades":" for the deck"):"no limit"}; current ${S.mode==="import"?"upgrade spend":"deck total"} ${money(spent())}.\nCURRENT DECK (${deckCount()} of ${mainSize()} cards; ${open>0?open+" open slots":open<0?(-open)+" over":"full"}):\n${deckLines()}\n${S.edh?"\nLIVE DATA: other popular/high-synergy cards (EDHREC + Scryfall price):\n"+poolLines(100,S.cards.filter(c=>c.sel).map(c=>c.n)):""}\n\nTHE PLAYER ASKS: "${req}"\n\nThe player's words take priority over the budget. If they ask for expensive, premium or splurge cards, or say they have more money, suggest the highest-impact premium cards for THIS deck (usually $15+ each, Game Changers only if the bracket allows), each paired with the weakest or most replaceable card to cut. Say in the reply roughly what the changes cost in total. Otherwise stay within the budget.\nPropose concrete changes. Keep the deck at exactly ${mainSize()} cards: number of adds minus cuts must equal ${open}. Basic lands count as cards; to cut a basic, name it like "Island". Reply with only one JSON object:\n{"reply":"2-4 sentences explaining your approach in plain words","add":[{"n":"exact card name","c":"<payoff|engine|ramp|draw|removal|wipe|protection|land>","mv":<n>,"usd":<approx>,"w":"<2-3 sentence synergy write-up for this deck>"}],"cut":[{"n":"exact name of a card currently in the deck","why":"<max 14 words>"}]}`,{signal:ctl.signal,modelTier:"default",cache:false});
+    const inDeck=S.cards.filter(c=>c.sel).map(c=>c.n);
+    // Surprise me decks stay owned-only: offer only the player's own cards and drop anything else the AI names.
+    const ownOnly=S.mode==="spin";
+    const ownPool=ownOnly?refineOwnedPool(inDeck):null;
+    const sourceTxt = ownOnly
+      ? `\nTHIS DECK IS BUILT ONLY FROM CARDS THE PLAYER OWNS. Every card you add MUST come from this list of their unused owned cards (name | type cost | notes), or be a basic land. Never suggest a card that isn't on this list, even if the player asks for one; say so in the reply instead.\n${[...ownPool.values()].map(x=>`${x.n} | ${x.d.type}${x.d.mana?" "+x.d.mana:""}${x.d.gc?" | GAME CHANGER":""}${x.edh?" | EDHREC pick":""}`).join("\n")||"(none left: every owned card that fits is already in the deck, so only suggest cuts or basic lands)"}\n`
+      : (S.edh?"\nLIVE DATA: other popular/high-synergy cards (EDHREC + Scryfall price):\n"+poolLines(100,inDeck):"");
+    const moneyTxt = ownOnly
+      ? "The player already owns every card on the list, so price doesn't matter; pick the best fits for the deck."
+      : "The player's words take priority over the budget. If they ask for expensive, premium or splurge cards, or say they have more money, suggest the highest-impact premium cards for THIS deck (usually $15+ each, Game Changers only if the bracket allows), each paired with the weakest or most replaceable card to cut. Say in the reply roughly what the changes cost in total. Otherwise stay within the budget.";
+    const r=await sample.json(`${ctx()}\n${ownOnly?"":`BUDGET: ${S.budget?"$"+S.budget+(S.mode==="import"?" for upgrades":" for the deck"):"no limit"}; current ${S.mode==="import"?"upgrade spend":"deck total"} ${money(spent())}.\n`}CURRENT DECK (${deckCount()} of ${mainSize()} cards; ${open>0?open+" open slots":open<0?(-open)+" over":"full"}):\n${deckLines()}\n${sourceTxt}\n\nTHE PLAYER ASKS: "${req}"\n\n${moneyTxt}\nPropose concrete changes. Keep the deck at exactly ${mainSize()} cards: number of adds minus cuts must equal ${open}. Basic lands count as cards; to cut a basic, name it like "Island". Reply with only one JSON object:\n{"reply":"2-4 sentences explaining your approach in plain words","add":[{"n":"exact card name","c":"<payoff|engine|ramp|draw|removal|wipe|protection|land>","mv":<n>,"usd":<approx>,"w":"<2-3 sentence synergy write-up for this deck>"}],"cut":[{"n":"exact name of a card currently in the deck","why":"<max 14 words>"}]}`,{signal:ctl.signal,modelTier:"default",cache:false});
     S.refine={req,reply:String(r&&r.reply||""),add:(r&&Array.isArray(r.add)?r.add:[]).filter(a=>a&&a.n).slice(0,20),cut:(r&&Array.isArray(r.cut)?r.cut:[]).filter(a=>a&&a.n).slice(0,20),applied:false};
+    if(ownOnly){
+      const dropped=[]; S.refine.add=S.refine.add.filter(a=>{ const x=ownPool.get(key(a.n)); if(x){ a.n=x.n; a.mv=x.d.mv; a.usd=x.d.usd; return true; } if(BASIC_NAMES.test(a.n)) return true; dropped.push(a.n); return false; });
+      if(dropped.length) S.refine.note=`Left out ${dropped.length===1?"1 card":dropped.length+" cards"} you don't own: ${dropped.slice(0,6).join(", ")}${dropped.length>6?"…":""}. Surprise decks only use your collection.`;
+    }
     if(LIVE&&S.refine.add.length){ statusLine(st,"Checking live prices…"); await liveTry(()=>scryNames(S.refine.add.map(a=>a.n)), st); }
     st.innerHTML=""; renderRefine(); save();
   }catch(e){ st.innerHTML = e&&e.code==="cancelled"?"":`<div class="err">${esc(errMsg(e))}</div>`; }
