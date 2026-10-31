@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -35,7 +35,7 @@ function loadPage({ storage = {} } = {}) {
     window: { addEventListener() {}, scrollTo() {} }, navigator: {},
     fetch: () => Promise.reject(new Error("offline")),
     requestAnimationFrame: (f) => f(), setTimeout: () => 0, clearTimeout: () => {},
-    console, Math, Date, JSON, Promise, URL, TextDecoder, TextEncoder, Blob: class {},
+    console, Math, Date, JSON, Promise, URL, TextDecoder, TextEncoder, Blob: class {}, AbortController, performance,
   };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
@@ -263,4 +263,54 @@ test("cards you own: finds owned cards that fit, rates them, and swaps one in", 
   assert.ok(T.S.cards.find((c) => c.n === "Mystic Remora").sel);
   assert.ok(!T.S.cards.find((c) => c.n === "Night's Whisper").sel);
   assert.equal(T.deckCount(), before);
+});
+
+test("sort by color groups cards by color identity", () => {
+  const { T } = loadPage();
+  T.putCard({ name: "Opt", ci: ["U"], type: "Instant", legal: "legal", mv: 1 });
+  T.putCard({ name: "Lightning Helix", ci: ["R", "W"], type: "Instant", legal: "legal", mv: 2 });
+  T.putCard({ name: "Sol Ring", ci: [], type: "Artifact", legal: "legal", mv: 1 });
+  T.putCard({ name: "Command Tower", ci: [], type: "Land", legal: "legal", mv: 0 });
+  assert.equal(T.colorGroup("Opt"), 1);
+  assert.equal(T.colorGroup("Lightning Helix"), 5);
+  assert.equal(T.colorGroup("Sol Ring"), 6);
+  assert.equal(T.colorGroup("Command Tower"), 7);
+  assert.equal(T.colorGroup("Island"), 7);
+  assert.equal(T.colorGroup("Vivi Ornitier"), 5, "commanders get colors from the built-in list");
+  assert.equal(T.colorGroup("Some Unknown Card"), 8);
+});
+
+test("surprise me: spins one of your commanders and drafts only owned cards", async () => {
+  const { T } = loadPage();
+  await new Promise((r) => setImmediate(r));
+  T.setLive(true);
+  T.putCard({ name: "Vivi Ornitier", ci: ["U", "R"], type: "Legendary Creature — Wizard", legal: "legal", mv: 2, mana: "{U}{R}", text: "Vivi text" });
+  const owned = [{ n: "Vivi Ornitier", q: 1 }];
+  for (let i = 0; i < 60; i++) { const n = "Spell " + i; owned.push({ n, q: 1 }); T.putCard({ name: n, ci: ["U"], type: "Instant", legal: "legal", mv: 2, usd: 1 }); }
+  owned.push({ n: "Off Color", q: 1 }); T.putCard({ name: "Off Color", ci: ["G"], type: "Instant", legal: "legal", mv: 1 });
+  T.collAddMany(owned, "add", "");
+  assert.deepEqual(plain(T.ownedCommanders()), ["Vivi Ornitier"]);
+  assert.ok(!T.ownedPoolFor(["U", "R"], ["Vivi Ornitier"]).some((x) => x.n === "Off Color"));
+  let prompt = "";
+  const fake = (input, opts) => {
+    prompt = input;
+    const lines = ['{"t":"plan","name":"Blue Tide","summary":"S","steps":["Early game: a"],"lands":36,"weights":{"U":0.7,"R":0.3},"bracket":2,"bracketWhy":"No Game Changers."}'];
+    for (let i = 0; i < 60; i++) lines.push(JSON.stringify({ t: "card", n: "Spell " + i, c: "engine", s: 6, w: "why" }));
+    lines.push('{"t":"card","n":"Not Owned Card","c":"payoff","s":9,"w":"x"}', '{"t":"card","n":"Off Color","c":"payoff","s":9,"w":"x"}', '{"t":"basic","n":"Island","q":25}', '{"t":"basic","n":"Mountain","q":11}', '{"t":"basic","n":"Forest","q":5}');
+    const text = lines.join("\n");
+    opts.onText({ text, delta: text });
+    return Promise.resolve({ text });
+  };
+  fake.json = async () => ({});
+  T.setSample(fake);
+  await T.spinDeck();
+  assert.equal(T.SPIN.msg, "", T.SPIN.msg);
+  assert.equal(T.S.commanders[0].name, "Vivi Ornitier");
+  assert.ok(prompt.includes("Spell 0") && !prompt.includes("Off Color"));
+  const names = T.S.cards.filter((c) => c.sel).map((c) => c.n);
+  assert.ok(!names.includes("Not Owned Card") && !names.includes("Off Color"), "only owned, on-color cards");
+  assert.equal(T.deckCount(), 99);
+  assert.ok(!("Forest" in T.S.basics), "no off-color basics");
+  assert.equal(T.S.spin.bracket, 2);
+  assert.equal(T.S.gameplans[0].name, "Blue Tide");
 });

@@ -33,6 +33,7 @@
     <div class="modes" role="group" aria-label="Mode">
       <button type="button" class="mode" data-mode="new"><b>New deck</b><span>Start from a commander and build 99 cards around it.</span></button>
       <button type="button" class="mode" data-mode="import"><b>Import a deck</b><span>Paste a Moxfield or Archidekt list and get upgrade suggestions.</span></button>
+      <button type="button" class="mode mode-spin" data-mode="spin"><b>Surprise me</b><span>Spin the wheel: a random commander you own and a deck built only from your cards.</span></button>
     </div>
   </section>
 
@@ -50,6 +51,13 @@
     </div>
     <div id="importCmdr"></div>
     <div class="row" id="importOwnRow" hidden><button class="btn small" id="importOwnBtn" type="button">Add this whole deck to my collection</button><span class="note">For decks you already have built.</span></div>
+  </section>
+
+  <section class="step" aria-labelledby="hSpin" id="spinSec" hidden>
+    <div class="step-h"><span class="num">1</span><h2 id="hSpin">Spin the wheel</h2><span class="hint">One of your commanders, a surprise game plan, and only cards you own. Aims for bracket 3 or higher.</span></div>
+    <div class="wheel" aria-live="polite"><div class="wheel-window"><div class="wheel-reel" id="wheelReel"></div></div><span class="wheel-pointer" aria-hidden="true"></span></div>
+    <div class="row"><button class="btn primary" id="spinBtn" type="button">Spin the wheel</button><button class="btn" id="spinStop" type="button" hidden>Stop</button><span id="spinStatus" class="progress"></span></div>
+    <div id="spinResult" style="display:grid;gap:10px"></div>
   </section>
 
   <section class="step" aria-labelledby="h1" id="cmdSec">
@@ -289,11 +297,12 @@
     <div class="row">
       <input id="collSearch" type="text" class="grow" placeholder="Search your cards" aria-label="Search your cards">
       <select id="collLoc" aria-label="Show"><option value="*">Everything</option></select>
-      <select id="collSort" aria-label="Sort"><option value="name">A–Z</option><option value="qty">Most copies</option><option value="recent">Recently added</option></select>
+      <select id="collSort" aria-label="Sort"><option value="name">A–Z</option><option value="qty">Most copies</option><option value="recent">Recently added</option><option value="color">Color</option></select>
       <button class="btn small" id="collCopy" type="button">Copy as list</button>
       <button class="btn small" id="collDl" type="button" hidden>Save .csv</button>
       <button class="btn small ghost" id="collClear" type="button">Delete all</button>
     </div>
+    <span class="note" id="collNote"></span>
     <div id="collTable" class="ctable"></div>
   </section>
 </div>

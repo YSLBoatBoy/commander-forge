@@ -279,6 +279,22 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .pt-fix.bad{border-left:3px solid var(--bad)} .pt-fix.warn{border-left:3px solid var(--warn)}
 .pt-swap{display:flex;gap:8px;align-items:flex-start;font-size:.9rem}
 .pt-swap .p{color:var(--ok);font-weight:700} .pt-swap .m{color:var(--bad);font-weight:700}
+/* surprise me */
+.mode-spin b::after{content:" ✦";color:var(--accent)}
+.wheel{position:relative;border:1px solid var(--line);border-radius:var(--r);background:var(--bg);overflow:hidden}
+.wheel-window{height:156px;overflow:hidden;-webkit-mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent);mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent)}
+.wheel-reel{will-change:transform}
+.wheel-row{height:52px;display:flex;align-items:center;justify-content:center;font:700 1.35rem var(--f-display);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 16px}
+.wheel-row.win{color:var(--fg)}
+.wheel-pointer{position:absolute;left:0;right:0;top:52px;height:52px;border-top:2px solid var(--accent);border-bottom:2px solid var(--accent);pointer-events:none;background:linear-gradient(90deg,var(--accent-soft),transparent 20%,transparent 80%,var(--accent-soft));opacity:.9}
+.spin-result{display:flex;flex-wrap:wrap;gap:14px 28px;justify-content:space-between;align-items:center;border-radius:var(--r);padding:16px 18px;border:1px solid var(--line);background:var(--bg)}
+.spin-result.ok{border-color:var(--ok)} .spin-result.low{border-color:var(--warn)}
+.spin-cmd{font:800 1.8rem/1.15 var(--f-display);text-wrap:balance}
+.spin-plan{font:500 .85rem var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:2px 0 6px}
+.spin-b{display:grid;gap:6px;justify-items:start;max-width:340px}
+.spin-badge{font:700 1.1rem var(--f-display);background:var(--ok-soft);color:var(--ok);border-radius:99px;padding:4px 14px}
+.cgroup{display:flex;justify-content:space-between;align-items:baseline;font:700 1.05rem var(--f-display);padding:14px 6px 4px;border-bottom:2px solid var(--line)}
+.cgroup .cnt{font:500 .78rem var(--f-mono);color:var(--muted)}
 /* cards you own */
 .ownrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;align-items:start;padding:10px 8px;border-radius:var(--r);border-left:3px solid transparent}
 .ownrow:hover{background:var(--sunk)}

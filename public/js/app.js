@@ -337,8 +337,9 @@ function pips(cost){
 function colorPips(cols){ return (cols&&cols.length?cols:["C"]).map(c=>`<span class="pip ${c}">${c}</span>`).join(""); }
 function renderMode(){
   document.querySelectorAll(".mode").forEach(b=>b.setAttribute("aria-pressed",String(S.mode===b.dataset.mode)));
-  const imp=S.mode==="import";
-  $("importSec").hidden=!imp; $("cmdSec").hidden=imp;
+  const imp=S.mode==="import", spin=S.mode==="spin";
+  $("importSec").hidden=!imp; $("cmdSec").hidden=imp||(spin&&!S.commanders.length);
+  $("cmdForm").hidden=spin;
   $("importText").value=S.importText||"";
   $("buildBtn").textContent = imp ? "Suggest upgrades" : "Build card pool";
   $("autofillBtn").hidden=imp; $("fillOpenBtn").hidden=imp;
@@ -534,7 +535,7 @@ function renderLive(){
   $("liveNote").hidden = LIVE || mcp===undefined;
   $("refreshBtn").hidden = !LIVE;
 }
-function render(){ renderMode(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); renderSaveBar(); renderOwnCheck(); }
+function render(){ renderMode(); renderSpin(); renderCommander(); renderPlans(); renderBracket(); renderInsight(); renderPool(); renderRefine(); renderDeck(); renderLive(); renderSaveBar(); renderOwnCheck(); }
 function save(){
   if(S.example){ S.example=false; $("exampleBanner").hidden=true; }   // once you change the example, it's your deck
   if(S.commanders.length || S.cards.length) DIRTY=true;
@@ -1284,12 +1285,27 @@ function renderCollection(){
     + (sel.length&&S.commanders.length?`<div><b>${ownDeck} / ${sel.length}</b><span>non-basic cards in your ${esc(S.commanders[0].name.split(",")[0])} build that you own</span></div>`:"");
   const q=fold($("collSearch").value.trim()), sort=$("collSort").value, where=$("collLoc").value||"*", place=where==="__gen"?"":where;
   let rows=[...COLL.values()]; if(where!=="*") rows=rows.filter(v=>(v.loc||"")===place); if(q) rows=rows.filter(v=>fold(v.n).includes(q));
-  rows.sort(sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
+  const cg=sort==="color"; if(cg) loadCollColors(rows);
+  rows.sort(cg?(a,b)=>colorGroup(a.n)-colorGroup(b.n)||ciKey(a.n).localeCompare(ciKey(b.n))||a.n.localeCompare(b.n):sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
+  const gcount={}; if(cg) rows.forEach(v=>{ const g=colorGroup(v.n); gcount[g]=(gcount[g]||0)+v.q; });
   const inDeck=new Set(sel.map(c=>key(c.n)));
   if(!COLL.size){ $("collTable").innerHTML='<div class="empty">No cards yet. Upload a spreadsheet or add cards above, and the deck builder will start marking what you own.</div>'; return; }
   if(!rows.length){ $("collTable").innerHTML=`<div class="empty">${q?"No cards match that search here.":"Nothing here yet."}</div>`; return; }
-  $("collTable").innerHTML = rows.slice(0,collLimit).map(v=>`<div class="crow"><span class="cn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`).join("")
+  $("collTable").innerHTML = rows.slice(0,collLimit).map((v,i,a)=>(cg&&(i===0||colorGroup(a[i-1].n)!==colorGroup(v.n))?`<div class="cgroup"><span>${COLOR_GROUPS[colorGroup(v.n)]}</span><span class="cnt">${gcount[colorGroup(v.n)]} cards</span></div>`:"")+`<div class="crow"><span class="cn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`).join("")
     + (rows.length>collLimit?`<div class="row" style="padding:10px 0"><button type="button" class="btn small" id="collMore">Show ${Math.min(150,rows.length-collLimit)} more</button><span class="note">Showing ${collLimit} of ${rows.length.toLocaleString()}</span></div>`:"");
+}
+// ---------- sort by color ----------
+const COLOR_GROUPS=["White","Blue","Black","Red","Green","Multicolor","Colorless","Lands","Color not known yet"];
+function cardCi(n){ const d=CARDDB[key(n)]; if(d) return d.ci; const c=cmdInfo(n); return c?c.ci.split("").filter(Boolean):null; }
+function colorGroup(n){ if(BASIC_NAMES.test(n)) return 7; const d=CARDDB[key(n)]; if(d&&isLandCard(n,d)) return 7; const ci=cardCi(n); if(!ci) return 8; return ci.length>1?5:ci.length?"WUBRG".indexOf(ci[0]):6; }
+function ciKey(n){ const ci=cardCi(n)||[]; return ["W","U","B","R","G"].filter(c=>ci.includes(c)).join(""); }
+let colorsLoading=false;
+async function loadCollColors(rows){
+  if(colorsLoading||!LIVE) { if(!LIVE&&rows.some(v=>colorGroup(v.n)===8)) $("collNote").textContent="Colors need live card data, so some cards show as “not known yet”."; return; }
+  const need=[...new Set(rows.filter(v=>!CARDDB[key(v.n)]&&!BASIC_NAMES.test(v.n)).map(v=>v.n))]; if(!need.length){ $("collNote").textContent=""; return; }
+  colorsLoading=true;
+  await liveTry(()=>scryNames(need.slice(0,3000),(d,t)=>{ $("collNote").textContent=`Looking up card colors… ${d} / ${t}`; }));
+  colorsLoading=false; $("collNote").textContent=""; renderCollection();
 }
 function collRows(){ const w=$("collLoc").value||"*", place=w==="__gen"?"":w; return [...COLL.values()].filter(v=>w==="*"||(v.loc||"")===place).sort((a,b)=>(a.loc||"").localeCompare(b.loc||"")||a.n.localeCompare(b.n)); }
 function collCSV(){ const q=s=>'"'+String(s).replace(/"/g,'""')+'"'; return "Quantity,Name,Location\n"+collRows().map(v=>v.q+","+q(v.n)+","+q(v.loc||"General collection")).join("\n"); }
@@ -1678,6 +1694,133 @@ function renderOwnCheck(){
       : `<div class="note">${cand.length?`You own ${cand.length} card${cand.length===1?"":"s"} that could go in this deck. Click <b>Check my collection</b> and the AI will say which are worth a slot.`:"Nothing in your collection fits this deck that isn't already in it."}</div>`;
   }
   $("ownOut").innerHTML=html;
+}
+
+// ================= surprise me (spin the wheel) =================
+// Picks a random commander you own and has the AI draft a deck only from your cards, aiming for bracket 3+.
+const SPIN={busy:false,ctl:null,last:"",msg:""};
+const isLandCard = (n,d) => BASIC_NAMES.test(n) || !!(d && /\bLand\b/.test(d.type) && !/Creature/.test(d.type));
+function ownedCommanders(){ const seen=new Set(), out=[]; for(const v of COLL.values()){ const k=key(v.n); if(seen.has(k)) continue; seen.add(k); if(isCommanderName(v.n)) out.push(v.n); } return out.sort((a,b)=>a.localeCompare(b)); }
+// Owned cards (one entry per name) that are legal and inside the given color identity, with live card data.
+function ownedPoolFor(ci, exclude){
+  const ex=new Set((exclude||[]).map(key)), seen=new Set(), out=[];
+  for(const e of BYNAME.values()){
+    const k=key(e.n); if(seen.has(k)||ex.has(k)||BASIC_NAMES.test(e.n)) continue; seen.add(k);
+    const d=CARDDB[k]; if(!d||d.legal!=="legal"||d.ci.some(x=>!ci.includes(x))) continue;
+    out.push({n:d.name,d,q:e.q,land:isLandCard(d.name,d)});
+  }
+  return out;
+}
+// The lowest bracket the deck's cards allow by the official rules (Game Changers, land denial, combos, extra turns).
+function rulesBracket(){
+  const sel=S.cards.filter(c=>c.sel); const gc=sel.filter(c=>c.f.includes("gc")).length, mld=sel.some(c=>c.f.includes("mld")), combo=sel.some(c=>c.f.includes("combo")), xt=sel.some(c=>c.f.includes("xturn"));
+  for(let k=1;k<=5;k++){ const bb=BRACKETS[k]; if(gc<=bb.gc && (!mld||bb.mld) && (!combo||bb.combo!==false) && (!xt||bb.xturn!=="none")) return k; }
+  return 5;
+}
+function spinStatus(t){ $("spinStatus").innerHTML = t ? `<span class="dot"></span> ${esc(t)}` : ""; }
+function animateWheel(names, pick){
+  const reel=$("wheelReel"); const H=52;
+  const seq=[]; const n=Math.max(28, names.length*3);
+  for(let i=0;i<n;i++) seq.push(names[Math.floor(Math.random()*names.length)]);
+  seq.push(pick, names[Math.floor(Math.random()*names.length)]);
+  reel.innerHTML=seq.map((x,i)=>`<div class="wheel-row${i===seq.length-2?" win":""}">${esc(x)}</div>`).join("");
+  const target=(seq.length-2)*H - H;   // land the pick in the middle row
+  const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(reduce||!window.requestAnimationFrame){ reel.style.transform=`translateY(${-target}px)`; return Promise.resolve(); }
+  return new Promise(res=>{ const t0=performance.now(), dur=3200; const step=t=>{ const p=Math.min(1,(t-t0)/dur), e=1-Math.pow(1-p,4); reel.style.transform=`translateY(${-target*e}px)`; if(p<1) requestAnimationFrame(step); else res(); }; requestAnimationFrame(step); });
+}
+async function spinDeck(){
+  if(needClaude()) return;
+  if(SPIN.busy) return;
+  SPIN.msg=""; renderSpin();
+  if(!LIVE){ SPIN.msg="Surprise decks need live card data to check your cards' colors. Open Commander Forge on your server (or the Claude desktop app)."; renderSpin(); return; }
+  const cmds=ownedCommanders();
+  if(!cmds.length){ SPIN.msg="You don't own any cards that can be a commander yet. Add one to My collection, then spin."; renderSpin(); return; }
+  if(DIRTY && !confirmLeaveBuild()) return;
+  SPIN.busy=true; SPIN.ctl=new AbortController(); running=[SPIN.ctl]; setBusy(true); renderSpin();
+  try{
+    const names=[...new Set([...BYNAME.values()].map(e=>e.n))];
+    await liveTry(()=>scryNames(names.slice(0,4000),(d,t)=>spinStatus(`Reading your collection… ${d} / ${t}`)), $("spinStatus"));
+    if(!LIVE) throw {code:"no_live",message:"Live card data stopped working, so your cards' colors can't be checked."};
+    spinStatus("Finding commanders you can build…");
+    const feas=cmds.map(n=>{ const d=CARDDB[key(n)]; if(!d||d.legal!=="legal") return null; const pool=ownedPoolFor(d.ci,[n]); return {n:d.name,d,pool,nonland:pool.filter(x=>!x.land).length}; }).filter(x=>x&&x.nonland>=45);
+    if(!feas.length) throw {code:"no_feasible",message:`None of your ${cmds.length} commander${cmds.length>1?"s has":" has"} enough of your cards in its colors yet (a deck needs about 45 non-land cards besides lands). Add more of your collection and spin again.`};
+    let opts=feas.filter(x=>x.n!==SPIN.last); if(!opts.length) opts=feas;
+    const pick=opts[Math.floor(Math.random()*opts.length)];
+    spinStatus("Spinning…");
+    await animateWheel(feas.map(x=>x.n), pick.n);
+    SPIN.last=pick.n;
+    // fresh deck around the pick
+    const keep={fmt:S.fmt,budget:S.budget};
+    S=fresh("spin"); Object.assign(S,keep);
+    S.commanders=[{name:pick.d.name,manaCost:pick.d.mana,type:pick.d.type,text:pick.d.text}];
+    S.colors=["W","U","B","R","G"].filter(c=>pick.d.ci.includes(c)); S.query=pick.d.name; S.bracket=3; S.ownedFree=true;
+    COMBOS=null; PT=null; HAND=null; render(); renderCombos(); renderPlaytest(); renderHand();
+    spinStatus(`Landed on ${pick.d.name}. Checking what players do with it…`);
+    await loadEdhForCommander($("spinStatus"));
+    const edhRank=new Map(((S.edh&&S.edh.pool)||[]).map(p=>[key(p.n),(p.inc||0)+p.syn*1.5]));
+    const pool=pick.pool.slice().sort((a,b)=>(edhRank.get(key(b.n))??-999)-(edhRank.get(key(a.n))??-999)||a.n.localeCompare(b.n)).slice(0,500);
+    const poolSet=new Map(pool.map(x=>[key(x.n),x]));
+    const basics=S.colors.map(c=>({W:"Plains",U:"Island",B:"Swamp",R:"Mountain",G:"Forest"})[c]);
+    const lines=pool.map(x=>`${x.n} | ${x.d.type}${x.d.mana?" "+x.d.mana:""}${x.d.gc?" | GAME CHANGER":""}${edhRank.has(key(x.n))?" | EDHREC pick":""}`).join("\n");
+    spinStatus("Drafting a surprise deck from your cards…");
+    let plan=null; const picked=[]; const basicQ={};
+    await streamCall(`You are drafting a SURPRISE Commander deck for a player, using ONLY cards they own.
+COMMANDER: ${pick.d.name} — ${pick.d.text.replace(/\n/g," ")}
+Color identity: ${S.colors.join("")||"colorless"}
+THE PLAYER OWNS ONLY THESE CARDS (name | type cost | notes). Never use a card that isn't on this list:
+${lines}
+Basic lands (${basics.join(", ")||"Wastes"}) are unlimited.
+
+Choose a game plan that is strong but not the most obvious one for this commander, so it feels like a surprise. Aim for at least Commander bracket 3: tight synergy, efficient interaction, up to 3 Game Changers, a two-card combo only as a late-game finisher. Build exactly 99 cards plus the commander: about 10 ramp, 10 card draw, 8 removal, 2-3 wipes, and 35-38 lands including basics.
+OUTPUT: JSON Lines, one object per line, no other text.
+First ONE plan line: {"t":"plan","name":"short catchy name for the game plan","summary":"3 sentences on how it plays and wins","steps":["Early game: ...","Mid game: ...","Late game: ..."],"winCons":["2-4"],"mulligan":"1-2 sentences","risks":"1 sentence","lands":<total lands>,"weights":{"<color>":<share 0-1>},"bracket":<1-5 honest estimate of the finished deck>,"bracketWhy":"one sentence"}
+Then one line per non-basic card: {"t":"card","n":"exact name from the list","c":"payoff|engine|ramp|draw|removal|wipe|protection|land","s":<synergy 1-10>,"w":"15-30 words on why it's in this deck","f":[any of "combo","xturn","mld","tutor"],"x":"combo partner or omit"}
+Then one line per basic land type: {"t":"basic","n":"Island","q":<count>}`, o=>{
+        if(o.t==="plan"){ plan=o; S.plan={summary:String(o.summary||""),steps:arr(o.steps,3),mulligan:String(o.mulligan||""),winCons:arr(o.winCons,4),risks:String(o.risks||""),lands:Number(o.lands)||37,weights:o.weights||{}}; S.landTarget=Math.max(30,Math.min(42,Number(o.lands)||37)); renderInsight(); }
+        else if(o.t==="card"){ const x=poolSet.get(key(o.n)); if(!x||picked.length>=99) return; const c=addCard({n:x.n,c:o.c,mv:x.d.mv,s:o.s,usd:x.d.usd,w:o.w,f:o.f,x:o.x},{o:"owned"}); if(c){ c.sel=true; picked.push(c); spinStatus(`Drafting… ${picked.length} cards`); renderPool(); renderDeck(); } }
+        else if(o.t==="basic"){ const b=String(o.n||""); if(basics.includes(b)) basicQ[b]=(basicQ[b]||0)+Math.max(0,Math.round(Number(o.q)||0)); }
+      }, SPIN.ctl);
+    if(picked.length<40) throw {code:"thin",message:"The AI didn't draft enough of your cards. Spin again."};
+    // lands: use the AI's basics, then fit the deck to exactly 99
+    S.basics = Object.keys(basicQ).length ? basicQ : null;
+    if(!S.basics){ S.basics=Object.fromEntries(basicsList()); }
+    const size=()=>S.cards.filter(c=>c.sel).length+Object.values(S.basics).reduce((a,b)=>a+b,0);
+    while(size()>99){ const big=Object.entries(S.basics).sort((a,b)=>b[1]-a[1])[0]; if(big&&big[1]>0&&S.cards.filter(c=>c.sel&&c.c==="land").length+Object.values(S.basics).reduce((a,b)=>a+b,0)>34){ S.basics[big[0]]--; continue; } const weak=S.cards.filter(c=>c.sel&&c.c!=="land").sort((a,b)=>a.s-b.s)[0]; if(!weak) break; weak.sel=false; }
+    if(size()<99 && basics.length){ const w=(S.plan&&S.plan.weights)||{}; while(size()<99){ const c=S.colors.slice().sort((a,b)=>(Number(w[b])||0)-(Number(w[a])||0))[(size())%Math.max(1,S.colors.length)]||S.colors[0]; const b=({W:"Plains",U:"Island",B:"Swamp",R:"Mountain",G:"Forest"})[c]; S.basics[b]=(S.basics[b]||0)+1; } }
+    S.gameplans=[{id:"surprise",name:String(plan&&plan.name||"Surprise plan"),pitch:S.plan?S.plan.summary:"",mechanics:[],keyCards:[]}]; S.chosen=["surprise"];
+    const rb=rulesBracket(), ai=Math.round(Number(plan&&plan.bracket))||rb;
+    const final=Math.max(rb, Math.min(5,ai));
+    S.bracket=final;
+    S.spin={commander:pick.d.name,plan:S.gameplans[0].name,bracket:final,bracketWhy:String(plan&&plan.bracketWhy||""),cards:picked.filter(c=>c.sel).length,pool:pick.pool.length,options:feas.length};
+    DIRTY=true; spinStatus(""); render(); save();
+    $("spinSec").scrollIntoView&&$("spinSec").scrollIntoView({behavior:"smooth",block:"start"});
+  }catch(e){ spinStatus(""); if(!(e&&e.code==="cancelled")) SPIN.msg=errMsg(e); }
+  SPIN.busy=false; running=[]; setBusy(false); renderSpin();
+}
+function renderSpin(){
+  const sec=$("spinSec"); if(!sec) return;
+  sec.hidden = S.mode!=="spin";
+  if(sec.hidden) return;
+  const cmds=COLL.size?ownedCommanders():[];
+  $("spinBtn").disabled=SPIN.busy; $("spinBtn").textContent = S.spin ? "Spin again" : "Spin the wheel";
+  $("spinStop").hidden=!SPIN.busy;
+  const reel=$("wheelReel");
+  if(!SPIN.busy && !reel.dataset.ready){ reel.dataset.ready="1"; const show=cmds.length?cmds:["Your commanders appear here"]; reel.innerHTML=[show[show.length-1]||"",show[0],show[1%show.length]||""].map((x,i)=>`<div class="wheel-row${i===1?" win":""}">${esc(x)}</div>`).join(""); reel.style.transform="translateY(0)"; }
+  const sp=S.spin; let html="";
+  if(SPIN.msg) html+=`<div class="warnbox">${esc(SPIN.msg)}</div>`;
+  if(sp && !SPIN.busy){
+    const ok=sp.bracket>=3;
+    html+=`<div class="spin-result ${ok?"ok":"low"}">
+      <div><span class="eyebrow">The wheel picked</span><div class="spin-cmd">${esc(sp.commander)}</div><div class="spin-plan">${esc(sp.plan)}</div>
+      <div class="small muted">${sp.cards} of your cards, drafted from the ${sp.pool} you own in its colors${sp.options>1?` · ${sp.options} of your commanders were buildable`:""}.</div></div>
+      <div class="spin-b">${ok?`<span class="spin-badge">Bracket ${sp.bracket}</span><div class="small">${esc(sp.bracketWhy)}</div>`:`<button type="button" class="btn primary" id="spinReroll">This is bracket ${sp.bracket}. Click to Reroll</button><div class="small">${esc(sp.bracketWhy)}</div>`}</div>
+    </div>
+    <div class="note">The full deck is below. Playtest it, check combos, then save it in step 9 if you like it.</div>`;
+  } else if(!sp && !SPIN.busy && !SPIN.msg){
+    html+=`<div class="note">${cmds.length?`You own ${cmds.length} card${cmds.length===1?"":"s"} that can be a commander. Spin to get one of them and a deck built only from your collection.`:"Add your cards to My collection first, including at least one legendary creature."}</div>`;
+  }
+  $("spinResult").innerHTML=html;
 }
 
 // ================= MTGJSON precons =================
@@ -2089,8 +2232,11 @@ document.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>{
   const m=b.dataset.mode; if(S.mode===m && !S.example) return;
   if(S.example){ const keep={bracket:S.bracket,budget:m==="import"?100:500,fmt:S.fmt}; S=fresh(m); Object.assign(S,keep); }
   else { S.mode=m; if(m==="import"&&S.cards.length&&!S.cards.some(c=>c.o==="deck")){ /* switching modes on a new build keeps it */ } }
-  render(); save(); (m==="import"?$("importText"):$("cmdInput")).focus();
+  render(); save(); (m==="import"?$("importText"):m==="spin"?$("spinBtn"):$("cmdInput")).focus();
 }));
+$("spinBtn").addEventListener("click",spinDeck);
+$("spinStop").addEventListener("click",()=>{ if(SPIN.ctl) SPIN.ctl.abort(); });
+$("spinResult").addEventListener("click",e=>{ if(e.target.id==="spinReroll") spinDeck(); });
 $("cmdForm").addEventListener("submit",e=>{ e.preventDefault(); acClose(); const q=$("cmdInput").value.trim(); if(!q){ $("cmdInput").focus(); return; } analyze(q); });
 $("importBtn").addEventListener("click",importDeck);
 $("importText").addEventListener("input",e=>{ S.importText=e.target.value; });
