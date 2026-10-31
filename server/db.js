@@ -30,6 +30,11 @@ export function openDb(dataDir) {
       count TEXT,
       updated INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS cards (
+      k TEXT PRIMARY KEY,          -- lower-cased card name (also each face of a two-faced card)
+      data TEXT NOT NULL,          -- JSON card summary the page uses (colors, type, cost, text, price)
+      updated INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS cache (
       url TEXT PRIMARY KEY,
       status INTEGER NOT NULL,
@@ -61,6 +66,8 @@ function wrap(db, file) {
     cacheGet: db.prepare("SELECT status, body, fetched FROM cache WHERE url=?"),
     cachePut: db.prepare("INSERT INTO cache(url,status,body,fetched) VALUES(?,?,?,?) ON CONFLICT(url) DO UPDATE SET status=excluded.status, body=excluded.body, fetched=excluded.fetched"),
     cachePrune: db.prepare("DELETE FROM cache WHERE fetched < ?"),
+    cardsAll: db.prepare("SELECT k, data, updated FROM cards"),
+    cardPut: db.prepare("INSERT INTO cards(k,data,updated) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET data=excluded.data, updated=excluded.updated"),
   };
   const tx = (fn) => { db.exec("BEGIN"); try { const r = fn(); db.exec("COMMIT"); return r; } catch (e) { db.exec("ROLLBACK"); throw e; } };
   return {
@@ -93,5 +100,19 @@ function wrap(db, file) {
     cacheGet(url) { return q.cacheGet.get(url) || null; },
     cachePut(url, status, body) { q.cachePut.run(url, status, body, Date.now()); },
     cachePrune(olderThanMs) { q.cachePrune.run(Date.now() - olderThanMs); },
+    // Card details looked up once and kept, so the collection doesn't ask Scryfall again on every visit.
+    cardsAll() { const out = []; for (const r of q.cardsAll.all()) { try { out.push([r.k, JSON.parse(r.data), r.updated]); } catch {} } return out; },
+    cardsPut(list) {
+      return tx(() => {
+        let n = 0; const now = Date.now();
+        for (const it of list) {
+          const k = String(it && it[0] || "").trim().toLowerCase().slice(0, 200); const d = it && it[1];
+          if (!k || !d || typeof d !== "object" || !d.name) continue;
+          const t = Math.min(now, Math.round(Number(it[2]) || now));
+          q.cardPut.run(k, JSON.stringify(d).slice(0, 20000), t); n++;
+        }
+        return n;
+      });
+    },
   };
 }

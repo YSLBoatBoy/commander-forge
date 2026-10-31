@@ -157,6 +157,16 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
         }
       }
 
+      // ---- card details kept between visits ----
+      if (p === "/api/cards") {
+        if (req.method === "GET") return send(res, 200, { cards: db.cardsAll() });
+        if (req.method === "POST") {
+          const b = await readBody(req);
+          if (!Array.isArray(b.cards)) return send(res, 400, { code: "invalid_request", message: "Expected {cards:[[key,card,updatedMs],...]}." });
+          return send(res, 200, { ok: true, count: db.cardsPut(b.cards.slice(0, 5000)) });
+        }
+      }
+
       // ---- saved builds ----
       if (p === "/api/builds" && req.method === "GET") return send(res, 200, { builds: db.buildsList() });
       const bm = p.match(/^\/api\/builds\/(.+)$/);

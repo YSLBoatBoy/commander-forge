@@ -188,14 +188,32 @@ function rememberCard(d){
   const usd = prices.usd!=null?Number(prices.usd): prices.usd_foil!=null?Number(prices.usd_foil): prices.usd_etched!=null?Number(prices.usd_etched): null;
   const front = d.card_faces&&d.card_faces[0]||{};
   const rec={name:d.name,mv:Number(d.cmc)||0,usd,gc:!!d.game_changer,ci:d.color_identity||[],legal:(d.legalities||{}).commander,type:d.type_line||front.type_line||"",mana:d.mana_cost||front.mana_cost||"",text:d.oracle_text||(d.card_faces||[]).map(f=>f.name+": "+(f.oracle_text||"")).join("\n"),rank:d.edhrec_rank,uri:d.scryfall_uri,prod:d.produced_mana||[]};
-  CARDDB[key(d.name)]=rec; if(d.card_faces) d.card_faces.forEach(f=>{ if(!CARDDB[key(f.name)]) CARDDB[key(f.name)]=rec; });
+  rec.at=Date.now();
+  CARDDB[key(d.name)]=rec; keepCard(key(d.name));
+  if(d.card_faces) d.card_faces.forEach(f=>{ const k=key(f.name); if(!CARDDB[k]||CARDDB[k].at<rec.at){ CARDDB[k]=rec; keepCard(k); } });
   return rec;
+}
+// ---- card details kept on the server, so each card is looked up once (not on every visit) ----
+const CARD_STALE_MS=3*864e5;          // prices older than this are refreshed when a deck needs them
+const CARDKEEP=new Set(); let cardKeepT=0;
+function keepCard(k){ if(!SERVER) return; CARDKEEP.add(k); clearTimeout(cardKeepT); cardKeepT=setTimeout(flushCards,1500); }
+async function flushCards(){
+  if(!CARDKEEP.size) return; const ks=[...CARDKEEP]; CARDKEEP.clear();
+  for(let i=0;i<ks.length;i+=1000){
+    const cards=ks.slice(i,i+1000).filter(k=>CARDDB[k]).map(k=>[k,CARDDB[k],CARDDB[k].at]);
+    try{ await fetch("api/cards",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cards})}); }catch(e){}
+  }
+}
+async function loadKeptCards(){
+  try{ const j=await fetch("api/cards").then(r=>r.json()); (j.cards||[]).forEach(([k,d,t])=>{ if(k&&d&&d.name&&!CARDDB[k]){ d.at=Number(t)||0; CARDDB[k]=d; } }); }catch(e){}
 }
 // Names Scryfall couldn't find (or that failed) this visit, so redraws don't look them up again and again.
 const SCRY_MISS=new Set();
-async function scryNames(names, onProgress){
+// keepStale: true for the collection view, which only needs colors, types and costs (those don't change), not fresh prices.
+async function scryNames(names, onProgress, keepStale){
   if(!LIVE) return;
-  const todo=[...new Set(names.map(n=>String(n||"").trim()).filter(n=>n&&!CARDDB[key(n)]&&!SCRY_MISS.has(key(n))&&!BASIC_NAMES.test(n)))];
+  const old=Date.now()-CARD_STALE_MS;
+  const todo=[...new Set(names.map(n=>String(n||"").trim()).filter(n=>{ if(!n||SCRY_MISS.has(key(n))||BASIC_NAMES.test(n)) return false; const d=CARDDB[key(n)]; return !d||(!keepStale&&(d.at||0)<old); }))];
   for(let i=0;i<todo.length;i+=20){
     const chunk=todo.slice(i,i+20);
     const q=chunk.map(n=>'!"'+n.replace(/"/g,"")+'"').join(" or ");
@@ -203,7 +221,7 @@ async function scryNames(names, onProgress){
       const j=await browserGet("https://api.scryfall.com/cards/search?unique=cards&q="+encodeURIComponent(q));
       (j.data||[]).forEach(rememberCard);
     }catch(e){ if(isLiveFatal(e)) throw e; }
-    chunk.forEach(n=>{ if(!CARDDB[key(n)]) SCRY_MISS.add(key(n)); });
+    chunk.forEach(n=>{ const d=CARDDB[key(n)]; if(!d) SCRY_MISS.add(key(n)); else if((d.at||0)<old) d.at=Date.now(); });
     if(onProgress) onProgress(Math.min(todo.length,i+20),todo.length);
   }
 }
@@ -1263,6 +1281,7 @@ async function initCollectionStore(){
       // The server's list always wins, so cards deleted on one device don't come back from another browser's copy.
       COLL.clear(); collLoadTuples(j.items); reindexColl(); saveCollLocal(); setSync("cloud");
     }catch(e){ setSync("error","Couldn't reach your server."); }
+    await loadKeptCards();
     await loadMetaRemote();
     renderCollection(); renderPool(); renderDeck(); renderOwnedToggles(); return;
   }
@@ -1336,7 +1355,7 @@ function renderCollection(){
   const allRows=rows;
   if(COLLCF.size) rows=rows.filter(v=>COLLCF.has(colorGroup(v.n)));
   rows.sort(cg?(a,b)=>colorGroup(a.n)-colorGroup(b.n)||ciKey(a.n).localeCompare(ciKey(b.n))||a.n.localeCompare(b.n):sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
-  loadCollColors(cg||COLLCF.size ? allRows : rows.slice(0,collLimit));
+  loadCollColors([...COLL.values()]);
   renderColorBar(allRows);
   const inDeck=new Set(sel.map(c=>key(c.n)));
   if(!COLL.size){ $("collTable").innerHTML='<div class="empty">No cards yet. Upload a spreadsheet or add cards above, and the deck builder will start marking what you own.</div>'; return; }
@@ -1376,7 +1395,7 @@ async function loadCollColors(rows){
   if(colorsLoading||!LIVE) { if(!LIVE&&($("collSort").value==="color"||COLLCF.size)&&rows.some(v=>colorGroup(v.n)===8)) $("collNote").textContent="Colors and mana costs need live card data, so some cards show as “not known yet”."; return; }
   const need=[...new Set(rows.filter(v=>!CARDDB[key(v.n)]&&!SCRY_MISS.has(key(v.n))&&!BASIC_NAMES.test(v.n)).map(v=>v.n))]; if(!need.length){ $("collNote").textContent=""; return; }
   colorsLoading=true;
-  await liveTry(()=>scryNames(need.slice(0,3000),(d,t)=>{ if(t>40) $("collNote").textContent=`Looking up card colors and costs… ${d} / ${t}`; }));
+  await liveTry(()=>scryNames(need,(d,t)=>{ if(t>40) $("collNote").textContent=`Looking up your cards once (they're kept for next time)… ${d} / ${t}`; },true));
   colorsLoading=false; $("collNote").textContent=""; renderCollection();
 }
 function collRows(){ const w=$("collLoc").value||"*", place=w==="__gen"?"":w; return [...COLL.values()].filter(v=>w==="*"||(v.loc||"")===place).sort((a,b)=>(a.loc||"").localeCompare(b.loc||"")||a.n.localeCompare(b.n)); }

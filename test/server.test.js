@@ -231,3 +231,12 @@ test("deck extras round-trip", async () => {
   assert.equal((await api("/api/decks")).json.decks["Vivi Storm"].commanders[0], "Vivi Ornitier");
   assert.equal((await api("/api/decks", { method: "PUT", body: { decks: [] } })).status, 400);
 });
+
+test("card details are kept between visits", async () => {
+  const card = { name: "Sol Ring", ci: [], type: "Artifact", mana: "{1}", mv: 1, legal: "legal", usd: 1.5 };
+  const r = await api("/api/cards", { method: "POST", body: { cards: [["sol ring", card, 123], ["", card, 1], ["bad", null, 1]] } });
+  assert.equal(r.json.count, 1);
+  await api("/api/cards", { method: "POST", body: { cards: [["sol ring", { ...card, usd: 2 }, 456]] } });
+  assert.deepEqual((await api("/api/cards")).json.cards, [["sol ring", { ...card, usd: 2 }, 456]]);
+  assert.equal((await api("/api/cards", { method: "POST", body: {} })).status, 400);
+});
