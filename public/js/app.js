@@ -191,9 +191,11 @@ function rememberCard(d){
   CARDDB[key(d.name)]=rec; if(d.card_faces) d.card_faces.forEach(f=>{ if(!CARDDB[key(f.name)]) CARDDB[key(f.name)]=rec; });
   return rec;
 }
+// Names Scryfall couldn't find (or that failed) this visit, so redraws don't look them up again and again.
+const SCRY_MISS=new Set();
 async function scryNames(names, onProgress){
   if(!LIVE) return;
-  const todo=[...new Set(names.map(n=>String(n||"").trim()).filter(n=>n&&!CARDDB[key(n)]&&!BASIC_NAMES.test(n)))];
+  const todo=[...new Set(names.map(n=>String(n||"").trim()).filter(n=>n&&!CARDDB[key(n)]&&!SCRY_MISS.has(key(n))&&!BASIC_NAMES.test(n)))];
   for(let i=0;i<todo.length;i+=20){
     const chunk=todo.slice(i,i+20);
     const q=chunk.map(n=>'!"'+n.replace(/"/g,"")+'"').join(" or ");
@@ -201,6 +203,7 @@ async function scryNames(names, onProgress){
       const j=await browserGet("https://api.scryfall.com/cards/search?unique=cards&q="+encodeURIComponent(q));
       (j.data||[]).forEach(rememberCard);
     }catch(e){ if(isLiveFatal(e)) throw e; }
+    chunk.forEach(n=>{ if(!CARDDB[key(n)]) SCRY_MISS.add(key(n)); });
     if(onProgress) onProgress(Math.min(todo.length,i+20),todo.length);
   }
 }
@@ -1352,7 +1355,7 @@ function ciKey(n){ const ci=cardCi(n)||[]; return ["W","U","B","R","G"].filter(c
 let colorsLoading=false;
 async function loadCollColors(rows){
   if(colorsLoading||!LIVE) { if(!LIVE&&($("collSort").value==="color"||COLLCF.size)&&rows.some(v=>colorGroup(v.n)===8)) $("collNote").textContent="Colors and mana costs need live card data, so some cards show as “not known yet”."; return; }
-  const need=[...new Set(rows.filter(v=>!CARDDB[key(v.n)]&&!BASIC_NAMES.test(v.n)).map(v=>v.n))]; if(!need.length){ $("collNote").textContent=""; return; }
+  const need=[...new Set(rows.filter(v=>!CARDDB[key(v.n)]&&!SCRY_MISS.has(key(v.n))&&!BASIC_NAMES.test(v.n)).map(v=>v.n))]; if(!need.length){ $("collNote").textContent=""; return; }
   colorsLoading=true;
   await liveTry(()=>scryNames(need.slice(0,3000),(d,t)=>{ if(t>40) $("collNote").textContent=`Looking up card colors and costs… ${d} / ${t}`; }));
   colorsLoading=false; $("collNote").textContent=""; renderCollection();
