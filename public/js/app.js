@@ -330,11 +330,36 @@ function upgradeBudget(){
 }
 
 // ================= rendering =================
-function pips(cost){
-  const m=String(cost||"").match(/\{[^}]+\}/g)||[];
-  return m.map(t=>{ const v=t.slice(1,-1).toUpperCase(); const cls="WUBRGC".includes(v)&&v.length===1?v:"N"; return `<span class="pip ${cls}" aria-label="${esc(v)}">${esc(v.length>2?v.slice(0,2):v.replace("/",""))}</span>`; }).join("");
+// ---------- mana symbols (drawn here, so they work offline and inside Claude) ----------
+const GLYPH={
+  W:'<circle cx="12" cy="12" r="4.3"/><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 2.6v2.6M12 18.8v2.6M2.6 12h2.6M18.8 12h2.6M5.4 5.4l1.9 1.9M16.7 16.7l1.9 1.9M5.4 18.6l1.9-1.9M16.7 7.3l1.9-1.9"/>',
+  U:'<path d="M12 2.4S5.4 10 5.4 14.6a6.6 6.6 0 0 0 13.2 0C18.6 10 12 2.4 12 2.4z"/>',
+  B:'<path fill-rule="evenodd" d="M12 2.8a7.6 7.6 0 0 0-7.6 7.6c0 2.6 1.3 4.5 3.2 5.6V20h2.3v-2h1.1v2h2v-2h1.1v2h2.3v-4c1.9-1.1 3.2-3 3.2-5.6A7.6 7.6 0 0 0 12 2.8zM9 9.1a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2zm6 0a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2z"/>',
+  R:'<path d="M12.6 2.3c.7 3.4 5.6 5.7 5.6 11.2a6.2 6.2 0 0 1-12.4 0c0-3.1 1.8-5 3-6.2.1 2 1 3.2 2.3 3.7-.3-3.5.4-6.3 1.5-8.7z"/>',
+  G:'<path d="M12 2.4l5.3 6.3h-2.7l3.7 5.1h-3.1l3.4 4.7H5.4l3.4-4.7H5.7l3.7-5.1H6.7z"/><rect x="10.8" y="18" width="2.4" height="3.6" rx=".6"/>',
+  C:'<path fill-rule="evenodd" d="M12 2.8l7.2 9.2-7.2 9.2L4.8 12zm0 4.4L8.3 12l3.7 4.8 3.7-4.8z"/>',
+  S:'<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/>',
+  P:'<g fill="none" stroke="currentColor" stroke-width="2.1"><circle cx="12" cy="12" r="5.4"/><path d="M12 3.2v17.6"/></g>',
+  L:'<path d="M1.8 19.5l6.4-9.6 3.7 5.3 2.6-3.6 7.7 7.9z"/><circle cx="17.5" cy="6.5" r="2.2"/>',
+};
+const SYM_NAME={W:"White",U:"Blue",B:"Black",R:"Red",G:"Green",C:"Colorless",S:"Snow",X:"X",M:"Multicolor",L:"Land",Q:"Unknown"};
+function manaSym(t){
+  t=String(t).toUpperCase().trim();
+  const nm=SYM_NAME[t]||t;
+  if(t==="M") return `<span class="ms ms-M" role="img" aria-label="Multicolor" title="Multicolor"></span>`;
+  if(t==="Q") return `<span class="ms ms-N" role="img" aria-label="Color not known yet" title="Color not known yet"><i>?</i></span>`;
+  if(GLYPH[t]) return `<span class="ms ms-${t}" role="img" aria-label="${nm}" title="${nm}"><svg viewBox="0 0 24 24" aria-hidden="true">${GLYPH[t]}</svg></span>`;
+  const hy=t.match(/^([WUBRGC2])\/([WUBRGP])$/);
+  if(hy){ const a=hy[1], b=hy[2];
+    if(b==="P") return `<span class="ms ms-${a} ms-phy" role="img" aria-label="Phyrexian ${SYM_NAME[a]||a}" title="Phyrexian ${SYM_NAME[a]||a}"><svg viewBox="0 0 24 24" aria-hidden="true">${GLYPH.P}</svg></span>`;
+    return `<span class="ms ms-hy" style="--a:var(--s${a==="2"?"C":a});--b:var(--s${b})" role="img" aria-label="${a==="2"?"2":SYM_NAME[a]} or ${SYM_NAME[b]}" title="${a==="2"?"2":SYM_NAME[a]} or ${SYM_NAME[b]}">${a==="2"?"<i>2</i>":""}</span>`; }
+  return `<span class="ms ms-N" role="img" aria-label="${esc(t)} generic mana" title="${esc(t)}"><i>${esc(t)}</i></span>`;
 }
-function colorPips(cols){ return (cols&&cols.length?cols:["C"]).map(c=>`<span class="pip ${c}">${c}</span>`).join(""); }
+
+function pips(cost){
+  return String(cost||"").split(/\s*\/\/\s*/).map(face=>(face.match(/\{[^}]+\}/g)||[]).map(t=>manaSym(t.slice(1,-1))).join("")).filter(Boolean).join('<span class="ms-sep">/</span>');
+}
+function colorPips(cols){ return `<span class="mss">${(cols&&cols.length?cols:["C"]).map(c=>manaSym(c)).join("")}</span>`; }
 function renderMode(){
   document.querySelectorAll(".mode").forEach(b=>b.setAttribute("aria-pressed",String(S.mode===b.dataset.mode)));
   const imp=S.mode==="import", spin=S.mode==="spin";
@@ -1285,26 +1310,51 @@ function renderCollection(){
     + (sel.length&&S.commanders.length?`<div><b>${ownDeck} / ${sel.length}</b><span>non-basic cards in your ${esc(S.commanders[0].name.split(",")[0])} build that you own</span></div>`:"");
   const q=fold($("collSearch").value.trim()), sort=$("collSort").value, where=$("collLoc").value||"*", place=where==="__gen"?"":where;
   let rows=[...COLL.values()]; if(where!=="*") rows=rows.filter(v=>(v.loc||"")===place); if(q) rows=rows.filter(v=>fold(v.n).includes(q));
-  const cg=sort==="color"; if(cg) loadCollColors(rows);
+  const cg=sort==="color";
+  const allRows=rows;
+  if(COLLCF.size) rows=rows.filter(v=>COLLCF.has(colorGroup(v.n)));
   rows.sort(cg?(a,b)=>colorGroup(a.n)-colorGroup(b.n)||ciKey(a.n).localeCompare(ciKey(b.n))||a.n.localeCompare(b.n):sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
-  const gcount={}; if(cg) rows.forEach(v=>{ const g=colorGroup(v.n); gcount[g]=(gcount[g]||0)+v.q; });
+  loadCollColors(cg||COLLCF.size ? allRows : rows.slice(0,collLimit));
+  renderColorBar(allRows);
   const inDeck=new Set(sel.map(c=>key(c.n)));
   if(!COLL.size){ $("collTable").innerHTML='<div class="empty">No cards yet. Upload a spreadsheet or add cards above, and the deck builder will start marking what you own.</div>'; return; }
-  if(!rows.length){ $("collTable").innerHTML=`<div class="empty">${q?"No cards match that search here.":"Nothing here yet."}</div>`; return; }
-  $("collTable").innerHTML = rows.slice(0,collLimit).map((v,i,a)=>(cg&&(i===0||colorGroup(a[i-1].n)!==colorGroup(v.n))?`<div class="cgroup"><span>${COLOR_GROUPS[colorGroup(v.n)]}</span><span class="cnt">${gcount[colorGroup(v.n)]} cards</span></div>`:"")+`<div class="crow"><span class="cn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`).join("")
+  if(!rows.length){ $("collTable").innerHTML=`<div class="empty">${q?"No cards match that search here.":COLLCF.size?"No cards of those colors here.":"Nothing here yet."}</div>`; return; }
+  const row=v=>{ const d=CARDDB[key(v.n)];
+    return `<div class="crow"><span class="cn"><span class="cnl"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span>${d&&d.type?`<span class="ctype">${esc(d.type)}</span>`:""}</span><span class="ccost">${d&&d.mana?pips(d.mana):""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`; };
+  const vis=rows.slice(0,collLimit);
+  let html="";
+  if(cg){
+    const tot={}; rows.forEach(v=>{ const g=colorGroup(v.n); const t=tot[g]||(tot[g]={cards:0,copies:0}); t.cards++; t.copies+=v.q; });
+    let cur=-1, open=false;
+    vis.forEach(v=>{ const g=colorGroup(v.n);
+      if(g!==cur){ if(open) html+="</div></section>"; cur=g; open=true;
+        html+=`<section class="cgsec g${g}"><header class="cghead">${groupSym(g)}<h3>${COLOR_GROUPS[g]}</h3><span class="cnt">${tot[g].cards.toLocaleString()} card${tot[g].cards===1?"":"s"} · ${tot[g].copies.toLocaleString()} cop${tot[g].copies===1?"y":"ies"}</span></header><div class="cgbody">`; }
+      html+=row(v); });
+    if(open) html+="</div></section>";
+  } else html=`<div class="cglist">${vis.map(row).join("")}</div>`;
+  $("collTable").innerHTML = html
     + (rows.length>collLimit?`<div class="row" style="padding:10px 0"><button type="button" class="btn small" id="collMore">Show ${Math.min(150,rows.length-collLimit)} more</button><span class="note">Showing ${collLimit} of ${rows.length.toLocaleString()}</span></div>`:"");
 }
 // ---------- sort by color ----------
+const COLLCF=new Set();   // color groups the card list is filtered to (empty = all)
+function groupSym(g){ return g<=4?manaSym("WUBRG"[g]):g===5?manaSym("M"):g===6?manaSym("C"):g===7?manaSym("L"):manaSym("Q"); }
+function renderColorBar(rows){
+  const el=$("collColors"); if(!el) return;
+  const cnt={}; rows.forEach(v=>{ const g=colorGroup(v.n); cnt[g]=(cnt[g]||0)+v.q; });
+  const groups=[0,1,2,3,4,5,6,7].concat(cnt[8]?[8]:[]);
+  el.innerHTML=groups.map(g=>`<button type="button" class="cbtn" data-cg="${g}" aria-pressed="${COLLCF.has(g)}" title="${COLOR_GROUPS[g]}">${groupSym(g)}<span>${(cnt[g]||0).toLocaleString()}</span></button>`).join("")
+    + (COLLCF.size?`<button type="button" class="btn small ghost" data-cg="all">Show all colors</button>`:"");
+}
 const COLOR_GROUPS=["White","Blue","Black","Red","Green","Multicolor","Colorless","Lands","Color not known yet"];
 function cardCi(n){ const d=CARDDB[key(n)]; if(d) return d.ci; const c=cmdInfo(n); return c?c.ci.split("").filter(Boolean):null; }
 function colorGroup(n){ if(BASIC_NAMES.test(n)) return 7; const d=CARDDB[key(n)]; if(d&&isLandCard(n,d)) return 7; const ci=cardCi(n); if(!ci) return 8; return ci.length>1?5:ci.length?"WUBRG".indexOf(ci[0]):6; }
 function ciKey(n){ const ci=cardCi(n)||[]; return ["W","U","B","R","G"].filter(c=>ci.includes(c)).join(""); }
 let colorsLoading=false;
 async function loadCollColors(rows){
-  if(colorsLoading||!LIVE) { if(!LIVE&&rows.some(v=>colorGroup(v.n)===8)) $("collNote").textContent="Colors need live card data, so some cards show as “not known yet”."; return; }
+  if(colorsLoading||!LIVE) { if(!LIVE&&($("collSort").value==="color"||COLLCF.size)&&rows.some(v=>colorGroup(v.n)===8)) $("collNote").textContent="Colors and mana costs need live card data, so some cards show as “not known yet”."; return; }
   const need=[...new Set(rows.filter(v=>!CARDDB[key(v.n)]&&!BASIC_NAMES.test(v.n)).map(v=>v.n))]; if(!need.length){ $("collNote").textContent=""; return; }
   colorsLoading=true;
-  await liveTry(()=>scryNames(need.slice(0,3000),(d,t)=>{ $("collNote").textContent=`Looking up card colors… ${d} / ${t}`; }));
+  await liveTry(()=>scryNames(need.slice(0,3000),(d,t)=>{ if(t>40) $("collNote").textContent=`Looking up card colors and costs… ${d} / ${t}`; }));
   colorsLoading=false; $("collNote").textContent=""; renderCollection();
 }
 function collRows(){ const w=$("collLoc").value||"*", place=w==="__gen"?"":w; return [...COLL.values()].filter(v=>w==="*"||(v.loc||"")===place).sort((a,b)=>(a.loc||"").localeCompare(b.loc||"")||a.n.localeCompare(b.n)); }
@@ -1976,7 +2026,7 @@ function renderMana(){
   const tp=cols.reduce((a,c)=>a+m.pips[c],0)||1, ts=cols.reduce((a,c)=>a+m.src[c],0)||1;
   let anyLow=false;
   el.innerHTML = cols.map(c=>{ const ps=m.pips[c]/tp, ss=m.src[c]/ts; const low = (m.pips[c]>=8 && m.src[c]<12) || ss < ps*0.75; if(low) anyLow=true;
-    return `<div class="mrow"><span class="pip ${c}">${c}</span><span class="mbar" title="Top: share of colored pips. Bottom: share of sources."><i style="width:${(ps*100).toFixed(0)}%"></i><u style="width:${(ss*100).toFixed(0)}%"></u></span><span class="st ${low?"warn":"ok"}">${Math.round(m.pips[c])} pips · ${Math.round(m.src[c])} src</span></div>`; }).join("")
+    return `<div class="mrow">${manaSym(c)}<span class="mbar" title="Top: share of colored pips. Bottom: share of sources."><i style="width:${(ps*100).toFixed(0)}%"></i><u style="width:${(ss*100).toFixed(0)}%"></u></span><span class="st ${low?"warn":"ok"}">${Math.round(m.pips[c])} pips · ${Math.round(m.src[c])} src</span></div>`; }).join("")
     + `<span class="note">Orange is how much of your spells' colored mana each color is; green is its share of your mana sources.${anyLow?" Colors in yellow are short on sources.":" Your sources match your spells."}${m.unknown?` ${m.unknown} cards without data aren't counted.`:""}</span>`;
   $("rebalance").hidden=!anyLow;
 }
@@ -2322,6 +2372,7 @@ $("addName").addEventListener("blur",()=>setTimeout(()=>{ AC2.items=[]; ac2Rende
 $("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList").value); if(!list.length){ $("pasteNote").textContent="Nothing to add. Put one card per line, like “4 Sol Ring”."; return; } const d=needDest(); if(!d.ok) return; const undo=collAddMany(list,"add",d.loc); $("pasteList").value=""; $("pasteNote").textContent=""; afterDest(d.loc); toast(`Added ${cardCount(list)} to ${locLabel(d.loc)}.`,{label:"Undo",fn:undo}); });
 $("collSearch").addEventListener("input",()=>{ collLimit=150; renderCollection(); });
 $("collSort").addEventListener("change",renderCollection);
+$("collColors").addEventListener("click",e=>{ const b=e.target.closest("[data-cg]"); if(!b) return; if(b.dataset.cg==="all") COLLCF.clear(); else { const g=Number(b.dataset.cg); COLLCF.has(g)?COLLCF.delete(g):COLLCF.add(g); } collLimit=150; renderCollection(); });
 $("collTable").addEventListener("click",e=>{
   if(e.target.id==="collMore"){ collLimit+=150; renderCollection(); return; }
   const st=e.target.closest("[data-cq]"); if(st){ const v=COLL.get(st.dataset.cq); if(v) collSet(v.n, v.q+Number(st.dataset.d), v.loc); return; }
