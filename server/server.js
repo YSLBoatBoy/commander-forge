@@ -57,12 +57,11 @@ function serveStatic(req, res, urlPath) {
       return send(res, 404, "Not found");
     }
     const ext = path.extname(file);
-    res.writeHead(200, {
-      "Content-Type": MIME[ext] || "application/octet-stream",
-      "Content-Length": st.size,
-      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
-      "X-Content-Type-Options": "nosniff",
-    });
+    // Browsers check back on every load (cheap 304 when unchanged), so a container update shows up right away.
+    const etag = `"${st.size.toString(36)}-${Math.round(st.mtimeMs).toString(36)}"`;
+    const common = { "Cache-Control": "no-cache", ETag: etag, "X-Content-Type-Options": "nosniff" };
+    if (req.headers["if-none-match"] === etag) { res.writeHead(304, common); return res.end(); }
+    res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream", "Content-Length": st.size, ...common });
     if (req.method === "HEAD") return res.end();
     fs.createReadStream(file).pipe(res);
   });

@@ -63,7 +63,12 @@ test("serves the page and its assets, and blocks path traversal", async () => {
   const r = await api("/");
   assert.equal(r.status, 200);
   assert.match(r.text, /<title>Commander Forge<\/title>/);
-  assert.equal((await api("/js/app.js")).status, 200);
+  const js = await fetch(base + "/js/app.js");
+  assert.equal(js.status, 200);
+  assert.equal(js.headers.get("cache-control"), "no-cache", "updates must show up without waiting for a cache to expire");
+  await js.arrayBuffer();
+  const again = await fetch(base + "/js/app.js", { headers: { "If-None-Match": js.headers.get("etag") } });
+  assert.equal(again.status, 304);
   assert.equal((await api("/data/precons.json")).status, 200);
   const t = await api("/%2e%2e/package.json");
   assert.notEqual(t.status, 200);
