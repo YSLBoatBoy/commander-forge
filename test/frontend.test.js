@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -322,4 +322,33 @@ test("surprise me: spins one of your commanders and drafts only owned cards", as
   assert.ok(rprompt.includes("Spare Owned") && !rprompt.includes("Off Color") && !rprompt.includes("BUDGET"), "prompt lists only unused owned cards");
   assert.deepEqual(plain(T.S.refine.add.map((a) => a.n)), ["Spare Owned"]);
   assert.match(T.S.refine.note, /Sol Ring/);
+});
+
+test("ask about a deck: finds its precon and lists exactly what was cut and added", async () => {
+  const { T } = loadPage();
+  await new Promise((r) => setImmediate(r));
+  const P = T.PREDATA; const i = 0; const d = P.d[i];
+  const cmd = P.n[d[3][0]];
+  const main = d[4].map((x) => (Array.isArray(x) ? [P.n[x[0]], x[1]] : [P.n[x], 1]));
+  const nonBasic = main.filter(([n]) => !/^(Plains|Island|Swamp|Mountain|Forest|Wastes)$/.test(n));
+  const cut = nonBasic.slice(0, 3).map(([n]) => n);
+  const list = [{ n: cmd, q: 1 }].concat(main.filter(([n]) => !cut.includes(n)).map(([n, q]) => ({ n, q })), [{ n: "Brand New Card", q: 1 }, { n: "Another Add", q: 1 }]);
+  T.collAddMany(list, "add", "My Precon");
+  T.setMeta("My Precon", { commanders: [cmd] });
+  assert.equal(T.deckPrecon("My Precon"), i);
+  const df = T.preconDiff("My Precon", i);
+  assert.deepEqual(plain(df.cut), cut.slice().sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(plain(df.added), ["Another Add", "Brand New Card"]);
+  let prompt = "";
+  const fake = (input, opts) => { prompt = input; const text = "You cut:\n- " + cut.join("\n- "); opts.onText({ text, delta: text }); return Promise.resolve({ text }); };
+  fake.json = async () => ({});
+  T.setSample(fake);
+  await T.askDeck("My Precon", "What cards from the precon did we cut?");
+  assert.ok(prompt.includes("CUT FROM THE PRECON") && cut.every((n) => prompt.includes(n)) && prompt.includes(d[0]));
+  const asks = T.DECKMETA["My Precon"].asks;
+  assert.equal(asks.length, 1);
+  assert.match(asks[0].a, new RegExp(cut[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // a deck that matches no precon says so
+  T.collAddMany([{ n: "Sol Ring", q: 1 }, { n: "Arcane Signet", q: 1 }], "add", "Scratch Deck");
+  assert.equal(T.deckPrecon("Scratch Deck"), null);
 });

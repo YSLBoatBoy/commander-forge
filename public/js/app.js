@@ -1519,6 +1519,75 @@ Reply with only one JSON object:
   }catch(e){ if(!(e&&e.code==="cancelled")) DECKERR[loc]={part:"sugg",msg:errMsg(e)}; }
   delete DECKBUSY[loc]; renderDecks();
 }
+// ---- Ask about this deck: free-form questions, with the matching precon diffed in code ----
+const DECKASK={};   // loc -> {draft, busy, live, ctl}
+const preconId = i => { const d=PRE.d[i]; return d?d[0]+"|"+d[1]:""; };
+const preconLabel = i => { const d=PRE.d[i]; return d?`${d[0]} (${d[1]}, ${d[2]})`:""; };
+function preconCounts(i){ const d=PRE.d[i], m=new Map(); const add=(ci,q)=>{ const n=PRE.n[ci]; const k=key(n); const cur=m.get(k); if(cur) cur.q+=q; else m.set(k,{n,q}); }; d[3].forEach(ci=>add(ci,1)); d[4].forEach(x=>{ const [ci,q]=Array.isArray(x)?x:[x,1]; add(ci,q); }); return m; }
+function deckCounts(loc){ const m=new Map(); deckEntries(loc).forEach(v=>{ const k=key(v.n); const cur=m.get(k); if(cur) cur.q+=v.q; else m.set(k,{n:v.n,q:v.q}); }); return m; }
+// Precons ranked by how many of their cards are in this deck; ones with the deck's commander get a boost.
+const PREMATCH={};
+function preconMatches(loc){
+  if(!PRE||!PRE.d||!PRE.d.length) return [];
+  const sig=deckSig(loc)+"#"+PRE.d.length; if(PREMATCH[loc]&&PREMATCH[loc].sig===sig) return PREMATCH[loc].list;
+  const list=preconMatchesNow(loc); PREMATCH[loc]={sig,list}; return list;
+}
+function preconMatchesNow(loc){
+  const dk=deckCounts(loc), cmds=new Set(deckCommanders(loc).map(key));
+  return PRE.d.map((d,i)=>{ const pc=preconCounts(i); let shared=0; pc.forEach((_,k)=>{ if(dk.has(k)&&!BASIC_NAMES.test(pc.get(k).n)) shared++; }); const nonBasic=[...pc.values()].filter(x=>!BASIC_NAMES.test(x.n)).length||1; const cm=d[3].some(ci=>cmds.has(key(PRE.n[ci]))); return {i,shared,of:nonBasic,score:shared/nonBasic+(cm?0.25:0)}; })
+    .filter(x=>x.shared>=15&&x.shared/x.of>=0.25).sort((a,b)=>b.score-a.score).slice(0,4);
+}
+function deckPrecon(loc){
+  const m=DECKMETA[loc]||{}; if(m.precon==="none") return null;
+  if(m.precon){ const i=PRE.d.findIndex((_,j)=>preconId(j)===m.precon); if(i>=0) return i; }
+  const best=preconMatches(loc)[0]; return best?best.i:null;
+}
+function preconDiff(loc,i){
+  const pc=preconCounts(i), dk=deckCounts(loc), cut=[], added=[];
+  pc.forEach((v,k)=>{ const have=dk.has(k)?dk.get(k).q:0; if(have<v.q) cut.push({n:v.n,q:v.q-have}); });
+  dk.forEach((v,k)=>{ const was=pc.has(k)?pc.get(k).q:0; if(v.q>was) added.push({n:v.n,q:v.q-was}); });
+  const fmt=a=>a.sort((x,y)=>x.n.localeCompare(y.n)).map(x=>(x.q>1?x.q+" ":"")+x.n);
+  return {cut:fmt(cut),added:fmt(added),kept:[...pc.keys()].filter(k=>dk.has(k)).length};
+}
+async function askDeck(loc,q){
+  q=String(q||"").trim().slice(0,600); if(!q) return; if(needClaude()) return;
+  const A=DECKASK[loc]=DECKASK[loc]||{}; if(A.busy) return;
+  A.busy=true; A.q=q; A.live=""; A.err=""; A.draft=""; A.ctl=new AbortController(); renderDecks();
+  try{
+    await preconsReady; await loadDeckData(loc);
+    const pi=deckPrecon(loc); const m=DECKMETA[loc]||{};
+    const here=new Set(deckEntries(loc).map(v=>key(v.n)));
+    const spare=[...new Set([...COLL.values()].filter(v=>v.loc!==loc&&!here.has(key(v.n))&&!BASIC_NAMES.test(v.n)).map(v=>v.n))].slice(0,250);
+    let pre="ORIGINAL PRECON: none of the preconstructed Commander decks matches this list closely, so it was probably built from scratch. If the player asks about a precon, say that and suggest they check the commander's precon name.";
+    if(pi!=null){ const df=preconDiff(loc,pi); pre=`ORIGINAL PRECON: ${preconLabel(pi)}. ${df.kept} of its cards are still in the deck. These lists were worked out exactly by comparing the two decklists; trust them over your own memory:
+CUT FROM THE PRECON (in the precon, not in this deck now) — ${df.cut.length} entries: ${df.cut.join("; ")||"nothing"}
+ADDED (in this deck, not in the precon) — ${df.added.length} entries: ${df.added.join("; ")||"nothing"}`; }
+    const past=(m.asks||[]).slice(0,3).reverse().map(x=>`Q: ${x.q}\nA: ${x.a.slice(0,600)}`).join("\n\n");
+    const prompt=`You are an expert Magic: The Gathering Commander player answering a question about one of the player's decks.
+DECK NAME: ${loc}
+COMMANDER: ${deckCmdText(loc)}
+DECK (${deckCopies(loc)} cards, "count name | type cost"):
+${deckListText(loc)}
+${m.desc&&m.desc.summary?`HOW IT WORKS (earlier analysis): ${m.desc.summary}\n`:""}
+${pre}
+${spare.length?`\nOTHER CARDS THE PLAYER OWNS (not in this deck): ${spare.join("; ")}\n`:""}${past?`\nEARLIER QUESTIONS ABOUT THIS DECK:\n${past}\n`:""}
+THE PLAYER ASKS: "${q}"
+
+Answer directly and specifically, naming cards. When listing cards, put one per line starting with "- ". Plain text only: no headings, no tables, no bold. Keep it under 250 words unless the player asks for a full list.`;
+    const r=await sample(prompt,{onText:({text})=>{ A.live=text; const el=$("deckDetail").querySelector("[data-ask-live]"); if(el) el.innerHTML=askHtml(text); },signal:A.ctl.signal,modelTier:"default",cache:false});
+    const a=String((r&&r.text)||A.live||"").trim(); if(!a) throw {code:"empty",message:"The AI didn't send an answer. Try again."};
+    const asks=[{q,a,at:Date.now(),precon:pi!=null?preconLabel(pi):""}].concat(m.asks||[]).slice(0,8);
+    setMeta(loc,{asks});
+  }catch(e){ if(!(e&&e.code==="cancelled")){ A.err=errMsg(e); A.draft=q; } }
+  A.busy=false; A.live=""; renderDecks();
+}
+// The answer is plain text; "- " lines become a list.
+function askHtml(t){
+  const out=[]; let ul=[];
+  const flush=()=>{ if(ul.length){ out.push(`<ul>${ul.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`); ul=[]; } };
+  String(t||"").replace(/\*\*/g,"").split("\n").forEach(l=>{ const m=l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/); if(m){ ul.push(m[1]); return; } flush(); if(l.trim()) out.push(`<p>${esc(l.trim())}</p>`); });
+  flush(); return out.join("");
+}
 async function openDeckInBuilder(loc, playtest){
   const cmds=deckCommanders(loc), ck=new Set(cmds.map(key));
   const text=cmds.map(n=>`1x ${n} [Commander{top}]`).concat(deckEntries(loc).filter(v=>!ck.has(key(v.n))).map(v=>`${v.q} ${v.n}`)).join("\n");
@@ -1596,7 +1665,25 @@ function renderDeckDetail(){
       <div class="dd-panel"><div class="dd-ph"><h4>How this deck works</h4><button type="button" class="btn small ${d&&!stale?"":"primary"}" data-dact="desc" ${busy||!sample?"disabled":""}>${d?"Regenerate description":"Describe this deck"}</button></div>${descHtml}</div>
       <div class="dd-panel"><div class="dd-ph"><h4>Play style &amp; change suggestions</h4><button type="button" class="btn small ${sg&&!sstale?"":"primary"}" data-dact="sugg" ${busy||!sample?"disabled":""}>${sg?"Refresh suggestions":"Get suggestions"}</button></div>${suggHtml}</div>
     </div>
-    ${!sample?'<div class="note">Descriptions and suggestions need an AI engine; set one up under AI engine in the deck builder.</div>':""}
+    ${askPanel(loc)}
+    ${!sample?'<div class="note">Descriptions, suggestions and questions need an AI engine; set one up under AI engine in the deck builder.</div>':""}
+  </div>`;
+}
+function askPanel(loc){
+  const A=DECKASK[loc]||{}, m=DECKMETA[loc]||{}, asks=m.asks||[];
+  const pre=PRE&&PRE.d&&PRE.d.length?preconMatches(loc):[]; const cur=PRE&&PRE.d&&PRE.d.length?deckPrecon(loc):null;
+  const preSel = pre.length||m.precon ? `<label class="f dd-pre">Compare with precon<select data-dpre><option value="none" ${m.precon==="none"?"selected":""}>No precon (built from scratch)</option>${[...new Set([...(cur!=null?[cur]:[]),...pre.map(x=>x.i)])].map(i=>{ const x=pre.find(y=>y.i===i); return `<option value="${esc(preconId(i))}" ${cur===i?"selected":""}>${esc(preconLabel(i))}${x?` · ${x.shared} of ${x.of} cards shared`:""}</option>`; }).join("")}</select></label>` : "";
+  const ex=["What cards from the precon did we cut?","What did we add that wasn't in the precon?","Which cards are the weakest here?","How many ramp and draw pieces does it run?","What should I cut to fit in another wincon?"].filter(t=>pre.length||!/precon/.test(t));
+  const hist=asks.map((x,i)=>`<div class="ask-qa"><div class="ask-q"><span>${esc(x.q)}</span><span class="muted small">${ago(x.at)}</span></div><div class="ask-a">${askHtml(x.a)}</div></div>`).join("");
+  return `<div class="dd-panel dd-ask">
+    <div class="dd-ph"><h4>Ask about this deck</h4>${asks.length&&!A.busy?'<button type="button" class="btn small ghost" data-dact="askclear">Clear answers</button>':""}</div>
+    ${preSel}
+    <div class="ask-box"><textarea data-ask-in rows="2" maxlength="600" placeholder="Ask anything, e.g. what cards from the precon did we cut?" ${A.busy||!sample?"disabled":""}>${esc(A.draft||"")}</textarea>
+      <button type="button" class="btn primary" data-dact="ask" ${A.busy||!sample?"disabled":""}>${A.busy?"Thinking…":"Ask"}</button></div>
+    <div class="examples">${ex.map(t=>`<button type="button" data-ask-ex>${esc(t)}</button>`).join("")}</div>
+    ${A.err?`<div class="err small">${esc(A.err)}</div>`:""}
+    ${A.busy?`<div class="ask-qa"><div class="ask-q"><span>${esc(A.q)}</span></div><div class="ask-a" data-ask-live>${A.live?askHtml(A.live):'<div class="progress"><span class="dot"></span> Reading the deck…</div>'}</div></div>`:""}
+    ${hist}
   </div>`;
 }
 
@@ -2443,17 +2530,23 @@ $("deckGrid").addEventListener("click",e=>{
   if(OPENDECK){ loadDeckData(loc); const dd=$("deckDetail"); dd.scrollIntoView&&dd.scrollIntoView({behavior:"smooth",block:"nearest"}); }
 });
 $("deckDetail").addEventListener("change",e=>{
+  const ps=e.target.closest("[data-dpre]"); if(ps&&OPENDECK){ setMeta(OPENDECK,{precon:ps.value}); renderDecks(); toast(ps.value==="none"?"This deck won't be compared with a precon.":"Questions will compare with "+ps.options[ps.selectedIndex].text.split(" · ")[0]+"."); return; }
   const sel=e.target.closest("[data-dcmd]"); if(!sel||!OPENDECK) return;
   const cur=deckCommanders(OPENDECK).slice(); const i=Number(sel.dataset.dcmd);
   if(i===0){ cur[0]=sel.value; if(!sel.value) cur.length=0; } else { if(sel.value) cur[1]=sel.value; else cur.length=Math.min(cur.length,1); }
   setMeta(OPENDECK,{commanders:cur.filter(Boolean)}); loadDeckData(OPENDECK); toast(cur.filter(Boolean).length?`Commander set to ${cur.filter(Boolean).join(" + ")}.`:"Commander cleared.");
 });
+$("deckDetail").addEventListener("input",e=>{ if(e.target.matches&&e.target.matches("[data-ask-in]")&&OPENDECK){ (DECKASK[OPENDECK]=DECKASK[OPENDECK]||{}).draft=e.target.value; } });
+$("deckDetail").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey&&e.target.matches&&e.target.matches("[data-ask-in]")&&OPENDECK){ e.preventDefault(); askDeck(OPENDECK,e.target.value); } });
 $("deckDetail").addEventListener("click",e=>{
+  const ex=e.target.closest("[data-ask-ex]"); if(ex&&OPENDECK){ askDeck(OPENDECK,ex.textContent); return; }
   const b=e.target.closest("[data-dact]"); if(!b||!OPENDECK) return; const loc=OPENDECK, act=b.dataset.dact;
   if(act==="playtest") return openDeckInBuilder(loc,true);
   if(act==="open") return openDeckInBuilder(loc,false);
   if(act==="desc") return describeDeck(loc);
   if(act==="sugg") return suggestDeck(loc);
+  if(act==="ask"){ const t=$("deckDetail").querySelector("[data-ask-in]"); return askDeck(loc,t&&t.value); }
+  if(act==="askclear"){ setMeta(loc,{asks:[]}); renderDecks(); return; }
   if(act==="rename"){ const inp=$("deckDetail").querySelector("[data-dact-name]"); const to=(inp&&inp.value||"").trim(); if(!to||to===loc) return; if(decksList().some(d=>d.name===to)){ toast(`There's already a deck called “${to}”. Pick another name.`); return; } const undo=renameDeck(loc,to); renderCollection(); toast(`Renamed to “${to}”.`,{label:"Undo",fn:()=>{ undo(); if(DECKMETA[to]){ DECKMETA[loc]=DECKMETA[to]; delete DECKMETA[to]; persistMeta(); } OPENDECK=loc; renderCollection(); }}); return; }
   if(act==="move"){ const undo=moveLocation(loc,""); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Moved “${loc}” into your general collection.`,{label:"Undo",fn:undo}); return; }
   if(act==="delete"){ if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent="Click again to delete it"; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; b.textContent="Delete deck"; } },4000); return; } const undo=deleteLocation(loc); OPENDECK=null; $("collLoc").value="*"; renderCollection(); toast(`Deleted “${loc}”.`,{label:"Undo",fn:undo}); }
