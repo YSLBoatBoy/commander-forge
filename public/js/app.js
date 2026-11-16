@@ -187,7 +187,7 @@ function rememberCard(d){
   const prices=d.prices||{};
   const usd = prices.usd!=null?Number(prices.usd): prices.usd_foil!=null?Number(prices.usd_foil): prices.usd_etched!=null?Number(prices.usd_etched): null;
   const front = d.card_faces&&d.card_faces[0]||{};
-  const rec={name:d.name,mv:Number(d.cmc)||0,usd,gc:!!d.game_changer,ci:d.color_identity||[],legal:(d.legalities||{}).commander,type:d.type_line||front.type_line||"",mana:d.mana_cost||front.mana_cost||"",text:d.oracle_text||(d.card_faces||[]).map(f=>f.name+": "+(f.oracle_text||"")).join("\n"),rank:d.edhrec_rank,uri:d.scryfall_uri,prod:d.produced_mana||[]};
+  const rec={name:d.name,mv:Number(d.cmc)||0,usd,gc:!!d.game_changer,ci:d.color_identity||[],legal:(d.legalities||{}).commander,type:d.type_line||front.type_line||"",mana:d.mana_cost||front.mana_cost||"",text:d.oracle_text||(d.card_faces||[]).map(f=>f.name+": "+(f.oracle_text||"")).join("\n"),rank:d.edhrec_rank,uri:d.scryfall_uri,prod:d.produced_mana||[],img:(d.image_uris||front.image_uris||{}).normal||""};
   rec.at=Date.now();
   CARDDB[key(d.name)]=rec; keepCard(key(d.name));
   if(d.card_faces) d.card_faces.forEach(f=>{ const k=key(f.name); if(!CARDDB[k]||CARDDB[k].at<rec.at){ CARDDB[k]=rec; keepCard(k); } });
@@ -1351,10 +1351,11 @@ function renderCollection(){
     + (sel.length&&S.commanders.length?`<div><b>${ownDeck} / ${sel.length}</b><span>non-basic cards in your ${esc(S.commanders[0].name.split(",")[0])} build that you own</span></div>`:"");
   const q=fold($("collSearch").value.trim()), sort=$("collSort").value, where=$("collLoc").value||"*", place=where==="__gen"?"":where;
   let rows=[...COLL.values()]; if(where!=="*") rows=rows.filter(v=>(v.loc||"")===place); if(q) rows=rows.filter(v=>fold(v.n).includes(q));
-  const cg=sort==="color";
+  const cg=sort==="color", tg=sort==="type";
+  const cmdSet=tg&&where!=="*"&&where!=="__gen"?new Set(deckCommanders(place).map(key)):null;
   const allRows=rows;
   if(COLLCF.size) rows=rows.filter(v=>COLLCF.has(colorGroup(v.n)));
-  rows.sort(cg?(a,b)=>colorGroup(a.n)-colorGroup(b.n)||ciKey(a.n).localeCompare(ciKey(b.n))||a.n.localeCompare(b.n):sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
+  rows.sort(tg?(a,b)=>typeGroup(a.n,cmdSet)-typeGroup(b.n,cmdSet)||cardMv(a.n)-cardMv(b.n)||a.n.localeCompare(b.n):cg?(a,b)=>colorGroup(a.n)-colorGroup(b.n)||ciKey(a.n).localeCompare(ciKey(b.n))||a.n.localeCompare(b.n):sort==="qty"?(a,b)=>b.q-a.q||a.n.localeCompare(b.n):sort==="recent"?(a,b)=>(b.t||0)-(a.t||0)||a.n.localeCompare(b.n):(a,b)=>a.n.localeCompare(b.n));
   loadCollColors([...COLL.values()]);
   renderColorBar(allRows);
   const inDeck=new Set(sel.map(c=>key(c.n)));
@@ -1364,7 +1365,11 @@ function renderCollection(){
     return `<div class="crow"><span class="cn"><span class="cnl"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In current build</span>':""}</span>${d&&d.type?`<span class="ctype">${esc(d.type)}</span>`:""}</span><span class="ccost">${d&&d.mana?pips(d.mana):""}</span><span class="step-q"><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><span>${v.q}</span><button type="button" data-cq="${esc(ckey(v.n,v.loc))}" data-d="1" aria-label="One more ${esc(v.n)}">+</button></span><button type="button" class="btn small ghost" data-crm="${esc(ckey(v.n,v.loc))}">Remove</button></div>`; };
   const vis=rows.slice(0,collLimit);
   let html="";
-  if(cg){
+  if(tg){
+    const tot={}; rows.forEach(v=>{ const g=typeGroup(v.n,cmdSet); const t=tot[g]||(tot[g]={cards:0,copies:0}); t.cards++; t.copies+=v.q; });
+    const secs={}; vis.forEach(v=>{ const g=typeGroup(v.n,cmdSet); (secs[g]=secs[g]||[]).push(v); });
+    html=`<div class="tgrid">${Object.keys(secs).map(Number).sort((a,b)=>a-b).map(g=>`<section class="tsec t${g}"><header><h3>${TYPE_GROUPS[g]}</h3><span class="cnt">${tot[g].copies.toLocaleString()}</span></header>${secs[g].map(v=>typeRow(v,where,inDeck)).join("")}</section>`).join("")}</div>`;
+  } else if(cg){
     const tot={}; rows.forEach(v=>{ const g=colorGroup(v.n); const t=tot[g]||(tot[g]={cards:0,copies:0}); t.cards++; t.copies+=v.q; });
     let cur=-1, open=false;
     vis.forEach(v=>{ const g=colorGroup(v.n);
@@ -1387,6 +1392,31 @@ function renderColorBar(rows){
     + (COLLCF.size?`<button type="button" class="btn small ghost" data-cg="all">Show all colors</button>`:"");
 }
 const COLOR_GROUPS=["White","Blue","Black","Red","Green","Multicolor","Colorless","Lands","Color not known yet"];
+// ---------- sort by card type (Archidekt-style columns) ----------
+const TYPE_GROUPS=["Commander","Planeswalkers","Battles","Creatures","Instants","Sorceries","Artifacts","Enchantments","Lands","Other","Type not known yet"];
+// Front face decides (a "Instant // Land" card is an instant); creatures win over artifact/enchantment.
+function typeGroup(n,cmds){
+  if(cmds&&cmds.has(key(n))) return 0; if(BASIC_NAMES.test(n)) return 8;
+  const d=CARDDB[key(n)]; if(!d||!d.type) return 10; const t=d.type.split("//")[0];
+  return /Planeswalker/.test(t)?1:/\bBattle\b/.test(t)?2:/Creature/.test(t)?3:/\bLand\b/.test(t)?8:/Instant/.test(t)?4:/Sorcery/.test(t)?5:/Artifact/.test(t)?6:/Enchantment/.test(t)?7:9;
+}
+function cardMv(n){ const d=CARDDB[key(n)]; return d&&!BASIC_NAMES.test(n)?(Number(d.mv)||0):99; }
+function typeRow(v,where,inDeck){
+  const d=CARDDB[key(v.n)], k=esc(ckey(v.n,v.loc));
+  return `<div class="trow" data-peek="${esc(v.n)}"><span class="tq">${v.q}</span><span class="tn"><a href="${sfUrl(v.n)}" target="_blank" rel="noopener">${esc(v.n)}</a>${where==="*"&&v.loc?` <span class="tag deckloc">${esc(v.loc)}</span>`:""}${inDeck.has(key(v.n))?' <span class="tag info">In build</span>':""}</span><span class="ccost">${d&&d.mana?pips(d.mana):""}</span><span class="tact"><button type="button" data-cq="${k}" data-d="-1" aria-label="One fewer ${esc(v.n)}">−</button><button type="button" data-cq="${k}" data-d="1" aria-label="One more ${esc(v.n)}">+</button><button type="button" data-crm="${k}" aria-label="Remove ${esc(v.n)}">×</button></span></div>`;
+}
+// Card picture on hover (self-hosted only: pictures come from Scryfall's image server, which the Claude version can't load).
+function cardImg(n){ const d=CARDDB[key(n)]; return (d&&d.img)||("https://api.scryfall.com/cards/named?format=image&version=normal&exact="+encodeURIComponent(n)); }
+let peekEl=null;
+function peek(e){
+  if(!SERVER||!document.body||!document.createElement) return;
+  const r=e.target.closest&&e.target.closest("[data-peek]");
+  if(!r||(window.matchMedia&&window.matchMedia("(hover: none)").matches)){ if(peekEl) peekEl.hidden=true; return; }
+  if(!peekEl){ peekEl=document.createElement("img"); peekEl.className="cardpeek"; peekEl.alt=""; peekEl.onload=()=>peekEl.classList.add("ok"); peekEl.onerror=()=>peekEl.classList.remove("ok"); document.body.appendChild(peekEl); }
+  const src=cardImg(r.dataset.peek); if(peekEl.dataset.src!==src){ peekEl.dataset.src=src; peekEl.classList.remove("ok"); peekEl.src=src; }
+  const W=244, H=340, x=e.clientX+18+W>innerWidth?e.clientX-W-18:e.clientX+18, y=Math.max(8,Math.min(innerHeight-H-8,e.clientY-H/2));
+  peekEl.style.left=x+"px"; peekEl.style.top=y+"px"; peekEl.hidden=false;
+}
 function cardCi(n){ const d=CARDDB[key(n)]; if(d) return d.ci; const c=cmdInfo(n); return c?c.ci.split("").filter(Boolean):null; }
 function colorGroup(n){ if(BASIC_NAMES.test(n)) return 7; const d=CARDDB[key(n)]; if(d&&isLandCard(n,d)) return 7; const ci=cardCi(n); if(!ci) return 8; return ci.length>1?5:ci.length?"WUBRG".indexOf(ci[0]):6; }
 function ciKey(n){ const ci=cardCi(n)||[]; return ["W","U","B","R","G"].filter(c=>ci.includes(c)).join(""); }
@@ -2501,6 +2531,8 @@ $("pasteBtn").addEventListener("click",()=>{ const list=parsePasted($("pasteList
 $("collSearch").addEventListener("input",()=>{ collLimit=150; renderCollection(); });
 $("collSort").addEventListener("change",renderCollection);
 $("collColors").addEventListener("click",e=>{ const b=e.target.closest("[data-cg]"); if(!b) return; if(b.dataset.cg==="all") COLLCF.clear(); else { const g=Number(b.dataset.cg); COLLCF.has(g)?COLLCF.delete(g):COLLCF.add(g); } collLimit=150; renderCollection(); });
+$("collTable").addEventListener("mousemove",peek);
+$("collTable").addEventListener("mouseleave",()=>{ if(peekEl) peekEl.hidden=true; });
 $("collTable").addEventListener("click",e=>{
   if(e.target.id==="collMore"){ collLimit+=150; renderCollection(); return; }
   const st=e.target.closest("[data-cq]"); if(st){ const v=COLL.get(st.dataset.cq); if(v) collSet(v.n, v.q+Number(st.dataset.d), v.loc); return; }
@@ -2526,7 +2558,9 @@ $("collLoc").addEventListener("change",()=>{ collLimit=150; const v=$("collLoc")
 $("deckGrid").addEventListener("click",e=>{
   const t=e.target.closest("[data-deck]"); if(!t) return; const loc=t.dataset.deck;
   OPENDECK = OPENDECK===loc ? null : loc;
-  $("collLoc").value = OPENDECK || "*"; collLimit=150; renderCollection();
+  $("collLoc").value = OPENDECK || "*"; collLimit=150;
+  if(OPENDECK&&$("collSort").value==="name") $("collSort").value="type";
+  renderCollection();
   if(OPENDECK){ loadDeckData(loc); const dd=$("deckDetail"); dd.scrollIntoView&&dd.scrollIntoView({behavior:"smooth",block:"nearest"}); }
 });
 $("deckDetail").addEventListener("change",e=>{

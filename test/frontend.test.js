@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -351,4 +351,24 @@ test("ask about a deck: finds its precon and lists exactly what was cut and adde
   // a deck that matches no precon says so
   T.collAddMany([{ n: "Sol Ring", q: 1 }, { n: "Arcane Signet", q: 1 }], "add", "Scratch Deck");
   assert.equal(T.deckPrecon("Scratch Deck"), null);
+});
+
+test("card type view groups cards like Archidekt", async () => {
+  const { T } = loadPage();
+  const put = (name, type) => T.putCard({ name, type, ci: [], legal: "legal", mv: 2 });
+  put("Kitchen Finks", "Creature — Ouphe"); put("Solemn Simulacrum", "Artifact Creature — Golem"); put("Fire // Ice", "Instant // Instant");
+  put("Emeria's Call // Emeria, Shattered Skyclave", "Sorcery // Land"); put("Command Tower", "Land"); put("Sol Ring", "Artifact");
+  put("Rhystic Study", "Enchantment"); put("Teferi, Time Raveler", "Legendary Planeswalker — Teferi"); put("Invasion of Ikoria", "Battle — Siege");
+  const g = (n, c) => ["Commander", "Planeswalkers", "Battles", "Creatures", "Instants", "Sorceries", "Artifacts", "Enchantments", "Lands", "Other", "Type not known yet"][T.typeGroup(n, c)];
+  assert.equal(g("Kitchen Finks", new Set(["kitchen finks"])), "Commander");
+  assert.equal(g("Solemn Simulacrum"), "Creatures");
+  assert.equal(g("Fire // Ice"), "Instants");
+  assert.equal(g("Emeria's Call // Emeria, Shattered Skyclave"), "Sorceries");
+  assert.equal(g("Command Tower"), "Lands");
+  assert.equal(g("Island"), "Lands");
+  assert.equal(g("Sol Ring"), "Artifacts");
+  assert.equal(g("Rhystic Study"), "Enchantments");
+  assert.equal(g("Teferi, Time Raveler"), "Planeswalkers");
+  assert.equal(g("Invasion of Ikoria"), "Battles");
+  assert.equal(g("Never Looked Up"), "Type not known yet");
 });
