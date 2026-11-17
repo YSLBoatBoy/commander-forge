@@ -20,6 +20,7 @@
 <nav class="tabs" role="tablist" aria-label="Sections">
   <button type="button" role="tab" id="tabBuilder" data-view="builder" aria-selected="true">Deck builder</button>
   <button type="button" role="tab" id="tabColl" data-view="collection" aria-selected="false">My collection<span class="cnt" id="collCount"></span></button>
+  <button type="button" role="tab" id="tabSync" data-view="sync" aria-selected="false">Backup &amp; sync</button>
 </nav>
 
 <div class="wrap" id="builderView">
@@ -254,6 +255,28 @@
     <span class="note">Decks you save appear here. Click one to open it.</span>
   </div>
 </aside>
+</div>
+
+<div class="collwrap" id="syncView" hidden>
+  <section class="step syncsec">
+    <div class="step-h"><h2>Backup &amp; sync</h2><span class="hint" id="syncWhere"></span></div>
+    <p class="note">Move everything between your Unraid server and the Commander Forge page in Claude: download a backup here, then import it on the other side. The file holds your collection, decks (with commanders, write-ups, suggestions and answers), saved builds, and the card details already looked up.</p>
+    <div class="syncgrid">
+      <div class="synccard">
+        <h3>1. Download a backup</h3>
+        <p class="small muted" id="syncSummary"></p>
+        <button type="button" class="btn primary" id="syncDl">Download backup</button>
+        <span class="note" id="syncDlNote"></span>
+      </div>
+      <div class="synccard">
+        <h3>2. Import a backup</h3>
+        <p class="small muted">Replaces the collection and decks here with the ones in the file. Saved builds in the file are added (same names are replaced).</p>
+        <label class="btn" for="syncFile">Choose backup file</label>
+        <input type="file" id="syncFile" accept=".json,application/json" hidden>
+        <div id="syncPreview"></div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <div class="collwrap" id="collectionView" hidden>

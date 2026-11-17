@@ -442,3 +442,13 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 
 .savecoll{display:flex;gap:6px;align-items:center;margin-top:8px}
 .savecoll[hidden]{display:none}
+
+/* ---- Backup & sync tab ---- */
+.syncsec{max-width:980px;margin:0 auto}
+.syncgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:12px}
+.synccard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;display:grid;gap:10px;align-content:start}
+.synccard h3{margin:0;font:700 1.1rem var(--f-display)}
+.synccard .btn{justify-self:start}
+.syncprev{border:1px dashed color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:var(--r);padding:10px 14px}
+.syncprev p{margin:0 0 6px}
+.okbox{background:color-mix(in srgb,var(--ok) 14%,transparent);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);border-radius:var(--r);padding:10px 14px}

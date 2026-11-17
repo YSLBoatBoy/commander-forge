@@ -1360,6 +1360,7 @@ async function initCollectionStore(){
     const id=await user.id(); if(!id){ setSync("local"); return; }
     cdb=db; cuid=id;
     const snap=await db.collection("data/users/"+id).get();
+    snap.docs.filter(d=>d.exists&&/^cards-/.test(d.id)).forEach(d=>{ ((d.data()||{}).items||[]).forEach(([k,c])=>{ if(k&&c&&c.name&&!CARDDB[k]) CARDDB[k]=c; }); });
     const docs=snap.docs.filter(d=>d.exists&&/^coll-/.test(d.id));
     if(docs.length){
       COLL.clear();
@@ -2676,17 +2677,90 @@ $("saved").addEventListener("click",async e=>{
   const d=e.target.closest("[data-del]"); if(d){ if(d.dataset.confirm!=="1"){ d.dataset.confirm="1"; d.textContent="Confirm"; setTimeout(()=>{ if(d.isConnected){d.dataset.confirm="";d.textContent="Delete";} },3000); return; } buildsDel(d.dataset.del); renderSaved(); }
 });
 
+// ================= Backup & sync (move everything between the Unraid server and the Claude page) =================
+let PENDING_BACKUP=null;
+function backupCounts(collection,decks,builds){
+  const places=new Set((collection||[]).map(x=>String(x[3]||"")).filter(Boolean));
+  return {cards:(collection||[]).reduce((a,x)=>a+(Number(x[1])||1),0), unique:new Set((collection||[]).map(x=>key(x[0]))).size, decks:places.size, write:Object.keys(decks||{}).length, builds:Object.keys(builds||{}).length};
+}
+const countLine = c => `${c.cards.toLocaleString()} cards (${c.unique.toLocaleString()} different) in ${c.decks} deck${c.decks===1?"":"s"} plus the general collection, ${c.builds} saved build${c.builds===1?"":"s"}`;
+function renderSync(){
+  $("syncWhere").textContent = SERVER ? "This is your Unraid server's copy." : "This is the copy inside Claude.";
+  const c=backupCounts([...COLL.values()].map(collTuple),DECKMETA,buildsAll());
+  $("syncSummary").textContent = `Here now: ${countLine(c)}.`;
+  $("syncDl").disabled=!downloads; if(!downloads) $("syncDlNote").textContent="Downloads aren't available here.";
+}
+async function downloadBackup(){
+  const note=$("syncDlNote"), b=$("syncDl"); b.disabled=true; note.textContent="Gathering everything…";
+  try{
+    const builds={}; for(const [name,v] of Object.entries(buildsAll())){ try{ const st=await buildState(name); if(st) builds[name]={t:v.t||0,count:v.count||"",state:st}; }catch(e){} }
+    const collection=[...COLL.values()].map(collTuple);
+    const keys=new Set(); collection.forEach(([n])=>{ keys.add(key(n)); keys.add(key(n).split(" // ")[0]); });
+    Object.values(builds).forEach(x=>{ const st=x.state||{}; (st.commanders||[]).forEach(c=>keys.add(key(c.name||""))); (st.cards||[]).filter(c=>c.sel).forEach(c=>keys.add(key(c.n||""))); });
+    const cards=[]; keys.forEach(k=>{ const d=CARDDB[k]; if(d&&d.name) cards.push([k,d]); });
+    const data={app:"commander-forge",v:1,exportedAt:new Date().toISOString(),from:SERVER?"server":"claude",collection,decks:DECKMETA,builds,cards};
+    const stamp=new Date().toISOString().slice(0,10);
+    await downloads.save({filename:`commander-forge-backup-${stamp}.json`,data:JSON.stringify(data)});
+    note.textContent=`Downloaded: ${countLine(backupCounts(collection,DECKMETA,builds))}, details for ${cards.length.toLocaleString()} cards.`;
+  }catch(e){ note.innerHTML=`<span class="err">Couldn't make the backup: ${esc((e&&e.message)||String(e))}</span>`; }
+  b.disabled=false;
+}
+function readBackupFile(f){
+  const out=$("syncPreview"); if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    let j=null; try{ j=JSON.parse(r.result); }catch(e){}
+    if(!j||j.app!=="commander-forge"||!Array.isArray(j.collection)){ out.innerHTML='<div class="err">That file isn\'t a Commander Forge backup. Use the file from "Download backup".</div>'; PENDING_BACKUP=null; return; }
+    PENDING_BACKUP=j;
+    const now=backupCounts([...COLL.values()].map(collTuple),DECKMETA,buildsAll()), inc=backupCounts(j.collection,j.decks,j.builds);
+    out.innerHTML=`<div class="syncprev"><p><b>From ${j.from==="server"?"your Unraid server":"the Claude page"}</b>, ${esc(new Date(j.exportedAt).toLocaleString())}: ${countLine(inc)}.</p>
+      <p class="small muted">Here now: ${countLine(now)}. Importing replaces the collection and decks here.</p>
+      <div class="row"><button type="button" class="btn primary" id="syncGo">Replace with this backup</button><button type="button" class="btn ghost" id="syncCancel">Cancel</button></div></div>`;
+  };
+  r.onerror=()=>{ out.innerHTML='<div class="err">Couldn\'t read that file.</div>'; };
+  r.readAsText(f);
+}
+async function importBackup(btn){
+  const j=PENDING_BACKUP; if(!j) return;
+  btn.disabled=true; btn.textContent="Importing…";
+  try{
+    // card details first, so colors, types and costs show right away
+    let nCards=0; (j.cards||[]).forEach(([k,d])=>{ if(k&&d&&d.name&&(!CARDDB[k]||(CARDDB[k].at||0)<(d.at||0))){ CARDDB[k]=d; keepCard(k); nCards++; } });
+    if(!SERVER) await keepCardsInClaude(j.cards||[]);
+    // collection and decks
+    COLL.clear(); collLoadTuples(j.collection); reindexColl(); saveCollLocal();
+    "abcdefghijklmnopqrstuvwxyz_".split("").forEach(b=>dirty.add(b)); await flushColl();
+    DECKMETA=(j.decks&&typeof j.decks==="object")?j.decks:{}; persistMeta(); await pushMeta();
+    let nb=0; for(const [name,v] of Object.entries(j.builds||{})){ if(v&&v.state){ try{ await buildsPut(name,{t:v.t||Date.now(),count:v.count||"",state:v.state}); nb++; }catch(e){} } }
+    if(SERVER) await flushCards();
+    PENDING_BACKUP=null;
+    $("syncPreview").innerHTML=`<div class="okbox">Imported: ${countLine(backupCounts(j.collection,j.decks,j.builds))}${nb?`, ${nb} build${nb===1?"":"s"} added to Saved builds`:""}. Open My collection to see your decks${SERVER?"":", and use “Ask about this deck” to ask Claude about them"}.</div>`;
+    renderSaved(); renderCollection(); renderDecks(); renderSync();
+    toast("Backup imported.");
+  }catch(e){ btn.disabled=false; btn.textContent="Replace with this backup"; $("syncPreview").insertAdjacentHTML("beforeend",`<div class="err">Import stopped: ${esc((e&&e.message)||String(e))}</div>`); }
+}
+// Inside Claude, card details are kept in the account's storage in one document per first letter.
+async function keepCardsInClaude(list){
+  if(!cdb||!cuid||!list.length) return;
+  const by={}; list.forEach(([k,d])=>{ if(k&&d&&d.name){ const b=bucket(k); (by[b]=by[b]||[]).push([k,d]); } });
+  for(const [b,items] of Object.entries(by)){ try{ await cdb.doc(`data/users/${cuid}/cards-${b}`).set({items}); }catch(e){} }
+}
 // ---------- collection & tabs events ----------
 function showView(v){
-  const coll=v==="collection";
-  $("builderView").hidden=coll; $("collectionView").hidden=!coll;
-  $("tabBuilder").setAttribute("aria-selected",String(!coll)); $("tabColl").setAttribute("aria-selected",String(coll));
-  document.querySelector(".mobilebar")&&(document.querySelector(".mobilebar").style.display=coll?"none":"");
+  const coll=v==="collection", sync=v==="sync", build=!coll&&!sync;
+  $("builderView").hidden=!build; $("collectionView").hidden=!coll; $("syncView").hidden=!sync;
+  $("tabBuilder").setAttribute("aria-selected",String(build)); $("tabColl").setAttribute("aria-selected",String(coll)); $("tabSync").setAttribute("aria-selected",String(sync));
+  document.querySelector(".mobilebar")&&(document.querySelector(".mobilebar").style.display=build?"":"none");
   if(coll) renderCollection();
+  if(sync) renderSync();
   try{ sessionStorage.setItem("cforge.view",v); }catch(e){}
 }
 $("tabBuilder").addEventListener("click",()=>showView("builder"));
 $("tabColl").addEventListener("click",()=>showView("collection"));
+$("tabSync").addEventListener("click",()=>showView("sync"));
+$("syncDl").addEventListener("click",downloadBackup);
+$("syncFile").addEventListener("change",e=>{ readBackupFile(e.target.files&&e.target.files[0]); e.target.value=""; });
+$("syncPreview").addEventListener("click",e=>{ if(e.target.id==="syncGo") importBackup(e.target); if(e.target.id==="syncCancel"){ PENDING_BACKUP=null; $("syncPreview").innerHTML=""; } });
 $("collFile").addEventListener("change",e=>{ handleFile(e.target.files&&e.target.files[0]); e.target.value=""; });
 ["dragenter","dragover"].forEach(t=>$("drop").addEventListener(t,e=>{ e.preventDefault(); $("drop").classList.add("over"); }));
 ["dragleave","drop"].forEach(t=>$("drop").addEventListener(t,e=>{ e.preventDefault(); $("drop").classList.remove("over"); }));
