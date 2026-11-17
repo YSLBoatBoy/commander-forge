@@ -1149,7 +1149,7 @@ async function importDeck(){
   finally{ setBusy(false); }
 }
 function deckLines(){
-  return S.cards.filter(c=>c.sel).map(c=>`${c.n} | ${c.c} | MV ${c.mv} | ${c.usd!=null?"$"+Number(c.usd).toFixed(2):"?"}${c.inc!=null?" | in "+c.inc+"% of decks":""}`).join("\n")
+  return S.cards.filter(c=>c.sel).map(c=>`${c.n} | ${c.c} | MV ${c.mv} | ${c.usd!=null?"$"+Number(c.usd).toFixed(2):"?"}${c.inc!=null?" | in "+c.inc+"% of decks":""}${isGC(c.n)||c.gcLive?" | GAME CHANGER":""}`).join("\n")
     + "\nBasics: " + basicsList().map(([b,k])=>k+" "+b).join(", ");
 }
 async function upgrade(){
@@ -1607,8 +1607,19 @@ function renameDeck(from,to){
   if($("collLoc").value===from){ renderCollection(); $("collLoc").value=to; }
   return undo;
 }
+// The deck list for AI prompts, followed by facts the app has checked itself (so the AI doesn't answer them from memory).
 function deckListText(loc){
-  return deckEntries(loc).sort((a,b)=>a.n.localeCompare(b.n)).map(v=>{ const d=CARDDB[key(v.n)]; return `${v.q} ${v.n}${d?` | ${d.type}${d.mana?" "+d.mana:""}`:""}`; }).join("\n");
+  const list=deckEntries(loc).sort((a,b)=>a.n.localeCompare(b.n)).map(v=>{ const d=CARDDB[key(v.n)], f=cardFacts(v.n); return `${v.q} ${v.n}${d?` | ${d.type}${d.mana?" "+d.mana:""}`:""}${f.gc?" | GAME CHANGER":""}`; }).join("\n");
+  return list+"\n\n"+deckFacts(loc);
+}
+function deckFacts(loc){
+  const b=deckBracket(loc), none="none";
+  return `CHECKED BY THE APP (exact, from the official lists; trust these over your memory and never contradict them):
+- Game Changers in this deck (official list of ${GAME_CHANGERS.length} cards, checked against every card in the list): ${b.gc.length?[...b.gc].sort().join(", ")+` (${b.gc.length} total)`:none}. No other card in this deck is a Game Changer.
+- Mass land denial: ${b.mld.length?b.mld.join(", "):none}.
+- Extra-turn cards: ${b.xt.length?b.xt.join(", "):none}.
+- Two-card combos (Commander Spellbook): ${b.combosChecked?(b.combos.length?b.combos.join("; "):none):"not checked yet"}.
+- Bracket by the official rules: at least ${b.floor<2?"1 (1 or 2)":b.floor}. Game Changers: 0 for brackets 1-2, up to 3 for bracket 3, 4 or more means bracket 4.`;
 }
 function deckCmdText(loc){ const c=deckCommanders(loc); return c.length ? c.map(n=>{ const d=CARDDB[key(n)]; return n+(d&&d.text?" — "+d.text.replace(/\n/g," "):""); }).join(" | ") : "not set; infer the most likely commander from the list"; }
 const firstObj = r => Array.isArray(r) ? (r.find(x=>x&&typeof x==="object"&&!Array.isArray(x))||{}) : (r&&typeof r==="object"?r:{});
@@ -1707,7 +1718,7 @@ DECK (${deckCopies(loc)} cards, "count name | type cost"):
 ${deckListText(loc)}
 ${m.desc&&m.desc.summary?`HOW IT WORKS (earlier analysis): ${m.desc.summary}\n`:""}
 ${pre}
-${spare.length?`\nOTHER CARDS THE PLAYER OWNS (not in this deck): ${spare.join("; ")}\n`:""}${past?`\nEARLIER QUESTIONS ABOUT THIS DECK:\n${past}\n`:""}
+${spare.length?`\nOTHER CARDS THE PLAYER OWNS (not in this deck): ${spare.join("; ")}\n`:""}${past?`\nEARLIER QUESTIONS ABOUT THIS DECK (earlier answers may contain mistakes; where they disagree with the checked facts above, follow the facts and don't dwell on the earlier answer):\n${past}\n`:""}
 THE PLAYER ASKS: "${q}"
 
 Answer directly and specifically, naming cards. When listing cards, put one per line starting with "- ". Plain text only: no headings, no tables, no bold. Keep it under 250 words unless the player asks for a full list.

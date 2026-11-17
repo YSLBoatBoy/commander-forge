@@ -489,3 +489,17 @@ Cutting the Heliod and Walking Ballista win condition removes the two-card infin
   T.applyAskChanges("Counters", 1);
   assert.equal(place("Counters")["Arcane Signet"], 1); assert.equal(place("Counters")["Sol Ring"], undefined);
 });
+
+test("deck prompts carry the app's own Game Changer count", async () => {
+  const { T } = loadPage();
+  await new Promise((r) => setImmediate(r));
+  T.collAddMany([{ n: "Yennett, Cryptic Sovereign", q: 1 }, { n: "Rhystic Study", q: 1 }, { n: "Vampiric Tutor", q: 1 }, { n: "Consecrated Sphinx", q: 1 }, { n: "Mystical Tutor", q: 1 }, { n: "Void Winnower", q: 1 }, { n: "Sol Ring", q: 1 }, { n: "Island", q: 30 }], "add", "Yennett");
+  let prompt = "";
+  const fake = (input, opts) => { prompt = input; opts.onText({ text: "ok", delta: "ok" }); return Promise.resolve({ text: "ok" }); };
+  fake.json = async () => ({}); T.setSample(fake);
+  await T.askDeck("Yennett", "list each game changer");
+  assert.match(prompt, /Game Changers in this deck[^\n]*Consecrated Sphinx, Mystical Tutor, Rhystic Study, Vampiric Tutor \(4 total\)/);
+  assert.match(prompt, /Rhystic Study \| .*GAME CHANGER|1 Rhystic Study \| GAME CHANGER/);
+  assert.ok(!/Sol Ring[^\n]*GAME CHANGER/.test(prompt) && !/Void Winnower[^\n]*GAME CHANGER/.test(prompt));
+  assert.match(prompt, /at least 4/);
+});
