@@ -1668,20 +1668,73 @@ ${pre}
 ${spare.length?`\nOTHER CARDS THE PLAYER OWNS (not in this deck): ${spare.join("; ")}\n`:""}${past?`\nEARLIER QUESTIONS ABOUT THIS DECK:\n${past}\n`:""}
 THE PLAYER ASKS: "${q}"
 
-Answer directly and specifically, naming cards. When listing cards, put one per line starting with "- ". Plain text only: no headings, no tables, no bold. Keep it under 250 words unless the player asks for a full list.`;
+Answer directly and specifically, naming cards. When listing cards, put one per line starting with "- ". Plain text only: no headings, no tables, no bold. Keep it under 250 words unless the player asks for a full list.
+If your answer recommends changing the deck (cards to cut and/or cards to add), end with one last line, exactly in this form and nothing after it:
+CHANGES: {"cut":["exact card names now in the deck"],"add":["exact card names to add"]}
+Leave that line out when you aren't recommending changes.`;
     const r=await sample(prompt,{onText:({text})=>{ A.live=text; const el=$("deckDetail").querySelector("[data-ask-live]"); if(el) el.innerHTML=askHtml(text); },signal:A.ctl.signal,modelTier:"default",cache:false});
-    const a=String((r&&r.text)||A.live||"").trim(); if(!a) throw {code:"empty",message:"The AI didn't send an answer. Try again."};
-    const asks=[{q,a,at:Date.now(),precon:pi!=null?preconLabel(pi):""}].concat(m.asks||[]).slice(0,8);
+    const raw=String((r&&r.text)||A.live||"").trim(); if(!raw) throw {code:"empty",message:"The AI didn't send an answer. Try again."};
+    const {text:a,changes}=splitChanges(raw,loc);
+    const asks=[{q,a,at:Date.now(),precon:pi!=null?preconLabel(pi):"",changes}].concat(m.asks||[]).slice(0,8);
     setMeta(loc,{asks});
   }catch(e){ if(!(e&&e.code==="cancelled")){ A.err=errMsg(e); A.draft=q; } }
   A.busy=false; A.live=""; renderDecks();
 }
 // The answer is plain text; "- " lines become a list.
 function askHtml(t){
+  t=String(t||"").replace(/\n?\s*CHANGES:[\s\S]*$/,"");
   const out=[]; let ul=[];
   const flush=()=>{ if(ul.length){ out.push(`<ul>${ul.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`); ul=[]; } };
   String(t||"").replace(/\*\*/g,"").split("\n").forEach(l=>{ const m=l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/); if(m){ ul.push(m[1]); return; } flush(); if(l.trim()) out.push(`<p>${esc(l.trim())}</p>`); });
   flush(); return out.join("");
+}
+// ---- changes proposed in an answer ("CHANGES: {...}" line, or "remove"/"add" lists as a fallback) ----
+function splitChanges(raw,loc){
+  let text=raw, cut=[], add=[];
+  const mm=raw.match(/\n?\s*CHANGES:\s*(\{[\s\S]*\})\s*$/);
+  if(mm){ text=raw.slice(0,mm.index).trim(); try{ const j=JSON.parse(mm[1]); cut=Array.isArray(j.cut)?j.cut:[]; add=Array.isArray(j.add)?j.add:[]; }catch(e){} }
+  if(!cut.length&&!add.length){ let mode=null;
+    raw.split("\n").forEach(l=>{ const h=l.trim(); const b=h.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+      if(!b){ mode=/\b(remove|cut|take out|swap out|drop)\b/i.test(h)&&/:\s*$/.test(h)?"cut":/\b(add|put in|swap in|include)\b/i.test(h)&&/:\s*$/.test(h)?"add":(h?null:mode); return; }
+      if(mode){ const n=b[1].replace(/\*\*/g,"").split(/\s+[—–-]\s+|:\s|\s\(/)[0].trim(); if(n) (mode==="cut"?cut:add).push(n); } }); }
+  const inDeck=new Map(deckEntries(loc).map(v=>[key(v.n),v.n]));
+  cut=[...new Set(cut.map(n=>inDeck.get(key(String(n).trim()))).filter(Boolean))].slice(0,30);
+  add=[...new Set(add.map(n=>String(n).replace(/^\d+x?\s+/i,"").trim()).filter(n=>n&&n.length<=141&&!inDeck.has(key(n))))].slice(0,30);
+  return {text, changes:cut.length||add.length?{cut,add}:null};
+}
+// Cut cards leave the deck (back to the general collection when `back`); added cards come out of the general collection when a copy is there.
+function applyDeckChanges(loc,cuts,adds,back){
+  let nAdd=0, nCut=0, fromGen=0; const t=Date.now();
+  const undo=collMutate(()=>{
+    const take=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(!v) return false; if(v.q>1) v.q--; else COLL.delete(k); return true; };
+    const put=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(v) v.q++; else COLL.set(k,{n,q:1,t,loc:place}); };
+    cuts.forEach(c=>{ const real=deckEntries(loc).find(v=>key(v.n)===key(c)); if(real&&take(real.n,loc)){ nCut++; if(back) put(real.n,""); } });
+    adds.forEach(a=>{ const g=[...COLL.values()].find(v=>!v.loc&&key(v.n)===key(a)); const name=g?g.n:a; if(g){ take(g.n,""); fromGen++; } put(name,loc); nAdd++; });
+    return "all";
+  },true);
+  return {undo, summary:`+${nAdd} / −${nCut}${fromGen?` (${fromGen} moved from your general collection)`:""}`};
+}
+const ASKOFF={};   // "loc|at" -> Set of "c:name" / "a:name" left unticked
+function askChangesUi(loc,x){
+  const ch=x.changes; if(!ch) return "";
+  const id=loc+"|"+x.at, off=ASKOFF[id]||new Set(), here=new Set(deckEntries(loc).map(v=>key(v.n)));
+  const item=(kind,n)=>{ const tag=kind+":"+n, ow=kind==="a"&&owned(n), gone=kind==="c"&&!here.has(key(n)), dd=CARDDB[key(n)];
+    return `<li><label class="sw">${ch.done?"":`<input type="checkbox" data-askch="${esc(x.at)}" data-tag="${esc(tag)}" ${off.has(tag)||gone?"":"checked"} ${gone?"disabled":""}>`}<span><span class="${kind==="a"?"p":"m"}">${kind==="a"?"+":"−"} ${esc(n)}</span>${ow?` <span class="tag own">Owned${ownedWhere(ow)?" · "+esc(ownedWhere(ow)):""}</span>`:""}${dd&&dd.usd!=null&&kind==="a"?` <span class="muted small">${money(dd.usd)}</span>`:""}${gone&&!ch.done?' <span class="muted small">(not in the deck now)</span>':""}</span></label></li>`; };
+  const n=ch.cut.filter(c=>here.has(key(c))&&!off.has("c:"+c)).length+ch.add.filter(a=>!off.has("a:"+a)).length;
+  return `<div class="ask-ch ${ch.done?"done":""}"><span class="eyebrow">${ch.done?"Changes made":"Changes in this answer"}</span>
+    ${(()=>{ const L=ch.done&&ch.made?ch.made:ch; return `<div class="ask-cols">${L.cut.length?`<ul class="dd-swaps">${L.cut.map(c=>item("c",c)).join("")}</ul>`:""}${L.add.length?`<ul class="dd-swaps">${L.add.map(a=>item("a",a)).join("")}</ul>`:""}</div>`; })()}
+    ${ch.done?"":`<div class="row sw-apply"><button type="button" class="btn primary" data-askapply="${esc(x.at)}" ${n?"":"disabled"}>${n?`Make ${n===1?"this change":"these "+n+" changes"}`:"Pick changes to make"}</button><label class="small"><input type="checkbox" data-swback ${SWAPBACK.v?"checked":""}> Put cut cards back in my general collection</label>${ch.cut.length!==ch.add.length?`<span class="note">${ch.cut.length} out, ${ch.add.length} in: the deck goes from ${deckCopies(loc)} to ${deckCopies(loc)-ch.cut.length+ch.add.length} cards.</span>`:""}</div>`}
+  </div>`;
+}
+function applyAskChanges(loc,at){
+  const m=DECKMETA[loc]||{}, asks=m.asks||[], x=asks.find(y=>String(y.at)===String(at)); if(!x||!x.changes||x.changes.done) return;
+  const off=ASKOFF[loc+"|"+x.at]||new Set();
+  const cuts=x.changes.cut.filter(c=>!off.has("c:"+c)), adds=x.changes.add.filter(a=>!off.has("a:"+a)); if(!cuts.length&&!adds.length) return;
+  const metaBefore=JSON.parse(JSON.stringify(m));
+  const r=applyDeckChanges(loc,cuts,adds,SWAPBACK.v);
+  x.changes.done=true; x.changes.made={cut:cuts,add:adds}; setMeta(loc,{asks});
+  renderDecks();
+  toast(`Updated “${loc}”: ${r.summary}.`,{label:"Undo",fn:()=>{ r.undo(); DECKMETA[loc]=metaBefore; persistMeta(); renderDecks(); toast("Changes undone."); }});
 }
 // ---- make suggested swaps right in the collection deck ----
 const SWAPOFF={};            // loc -> Set of unticked swap indexes
@@ -1689,19 +1742,13 @@ const SWAPBACK={v:true};     // put cut cards back in the general collection
 function applySwaps(loc){
   const m=DECKMETA[loc]||{}, sg=m.sugg; if(!sg) return;
   const off=SWAPOFF[loc]||new Set(); const pick=sg.swaps.map((x,i)=>i).filter(i=>!sg.swaps[i].done&&!off.has(i)); if(!pick.length) return;
-  const metaBefore=JSON.parse(JSON.stringify(m)); let adds=0, cuts=0, fromGen=0; const t=Date.now();
-  const undoColl=collMutate(()=>{
-    const take=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(!v) return false; if(v.q>1) v.q--; else COLL.delete(k); return true; };
-    const put=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(v) v.q++; else COLL.set(k,{n,q:1,t,loc:place}); };
-    pick.forEach(i=>{ const x=sg.swaps[i];
-      if(x.cut){ const real=deckEntries(loc).find(v=>key(v.n)===key(x.cut)); if(real&&take(real.n,loc)){ cuts++; if(SWAPBACK.v) put(real.n,""); } }
-      if(x.add){ const g=[...COLL.values()].find(v=>!v.loc&&key(v.n)===key(x.add)); const name=g?g.n:x.add; if(g){ take(g.n,""); fromGen++; } put(name,loc); adds++; }
-      x.done=true; });
-    return "all";
-  },true);
+  const metaBefore=JSON.parse(JSON.stringify(m));
+  const cuts=pick.map(i=>sg.swaps[i].cut).filter(Boolean), adds=pick.map(i=>sg.swaps[i].add).filter(Boolean);
+  const r=applyDeckChanges(loc,cuts,adds,SWAPBACK.v);
+  pick.forEach(i=>{ sg.swaps[i].done=true; });
   setMeta(loc,{sugg:sg,suggSig:deckSig(loc)});
   renderDecks();
-  toast(`Made ${pick.length} change${pick.length>1?"s":""} to “${loc}”: +${adds} / −${cuts}${fromGen?` (${fromGen} moved from your general collection)`:""}.`,{label:"Undo",fn:()=>{ undoColl(); DECKMETA[loc]=metaBefore; persistMeta(); renderDecks(); toast("Changes undone."); }});
+  toast(`Made ${pick.length} change${pick.length>1?"s":""} to “${loc}”: ${r.summary}.`,{label:"Undo",fn:()=>{ r.undo(); DECKMETA[loc]=metaBefore; persistMeta(); renderDecks(); toast("Changes undone."); }});
 }
 async function openDeckInBuilder(loc, playtest){
   const cmds=deckCommanders(loc), ck=new Set(cmds.map(key));
@@ -1796,7 +1843,7 @@ function askPanel(loc){
   const pre=PRE&&PRE.d&&PRE.d.length?preconMatches(loc):[]; const cur=PRE&&PRE.d&&PRE.d.length?deckPrecon(loc):null;
   const preSel = pre.length||m.precon ? `<label class="f dd-pre">Compare with precon<select data-dpre><option value="none" ${m.precon==="none"?"selected":""}>No precon (built from scratch)</option>${[...new Set([...(cur!=null?[cur]:[]),...pre.map(x=>x.i)])].map(i=>{ const x=pre.find(y=>y.i===i); return `<option value="${esc(preconId(i))}" ${cur===i?"selected":""}>${esc(preconLabel(i))}${x?` · ${x.shared} of ${x.of} cards shared`:""}</option>`; }).join("")}</select></label>` : "";
   const ex=["What cards from the precon did we cut?","What did we add that wasn't in the precon?","Which cards are the weakest here?","How many ramp and draw pieces does it run?","What should I cut to fit in another wincon?"].filter(t=>pre.length||!/precon/.test(t));
-  const hist=asks.map((x,i)=>`<div class="ask-qa"><div class="ask-q"><span>${esc(x.q)}</span><span class="muted small">${ago(x.at)}</span></div><div class="ask-a">${askHtml(x.a)}</div></div>`).join("");
+  const hist=asks.map((x,i)=>`<div class="ask-qa"><div class="ask-q"><span>${esc(x.q)}</span><span class="muted small">${ago(x.at)}</span></div><div class="ask-a">${askHtml(x.a)}</div>${askChangesUi(loc,x)}</div>`).join("");
   return `<div class="dd-panel dd-ask">
     <div class="dd-ph"><h4>Ask about this deck</h4>${asks.length&&!A.busy?'<button type="button" class="btn small ghost" data-dact="askclear">Clear answers</button>':""}</div>
     ${preSel}
@@ -2657,7 +2704,8 @@ $("deckGrid").addEventListener("click",e=>{
 });
 $("deckDetail").addEventListener("change",e=>{
   if(e.target.matches&&e.target.matches("[data-swap]")&&OPENDECK){ const set=SWAPOFF[OPENDECK]=SWAPOFF[OPENDECK]||new Set(), i=Number(e.target.dataset.swap); if(e.target.checked) set.delete(i); else set.add(i); renderDecks(); return; }
-  if(e.target.matches&&e.target.matches("[data-swback]")){ SWAPBACK.v=e.target.checked; return; }
+  if(e.target.matches&&e.target.matches("[data-swback]")){ SWAPBACK.v=e.target.checked; renderDecks(); return; }
+  if(e.target.matches&&e.target.matches("[data-askch]")&&OPENDECK){ const id=OPENDECK+"|"+e.target.dataset.askch, set=ASKOFF[id]=ASKOFF[id]||new Set(); if(e.target.checked) set.delete(e.target.dataset.tag); else set.add(e.target.dataset.tag); renderDecks(); return; }
   const ps=e.target.closest("[data-dpre]"); if(ps&&OPENDECK){ setMeta(OPENDECK,{precon:ps.value}); renderDecks(); toast(ps.value==="none"?"This deck won't be compared with a precon.":"Questions will compare with "+ps.options[ps.selectedIndex].text.split(" · ")[0]+"."); return; }
   const sel=e.target.closest("[data-dcmd]"); if(!sel||!OPENDECK) return;
   const cur=deckCommanders(OPENDECK).slice(); const i=Number(sel.dataset.dcmd);
@@ -2668,6 +2716,7 @@ $("deckDetail").addEventListener("input",e=>{ if(e.target.matches&&e.target.matc
 $("deckDetail").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey&&e.target.matches&&e.target.matches("[data-ask-in]")&&OPENDECK){ e.preventDefault(); askDeck(OPENDECK,e.target.value); } });
 $("deckDetail").addEventListener("click",e=>{
   const ex=e.target.closest("[data-ask-ex]"); if(ex&&OPENDECK){ askDeck(OPENDECK,ex.textContent); return; }
+  const ap=e.target.closest("[data-askapply]"); if(ap&&OPENDECK){ applyAskChanges(OPENDECK,ap.dataset.askapply); return; }
   const b=e.target.closest("[data-dact]"); if(!b||!OPENDECK) return; const loc=OPENDECK, act=b.dataset.dact;
   if(act==="playtest") return openDeckInBuilder(loc,true);
   if(act==="open") return openDeckInBuilder(loc,false);

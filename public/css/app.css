@@ -433,3 +433,9 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .dt-row .bkt span{display:none}
 .bkline{display:flex;gap:10px;align-items:flex-start;background:var(--sunk);border-radius:var(--r);padding:10px 12px;line-height:1.45}
 .bkline .bkt{flex:none;margin-top:1px}
+
+/* ---- changes proposed in an "Ask about this deck" answer ---- */
+.ask-ch{border:1px dashed color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:var(--r);padding:10px 14px;display:grid;gap:6px;max-width:80ch}
+.ask-ch.done{opacity:.65;border-style:solid}
+.ask-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:4px 24px}
+.ask-cols .dd-swaps li{padding:4px 0}

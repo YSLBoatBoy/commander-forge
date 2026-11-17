@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,splitChanges,applyAskChanges,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -437,4 +437,51 @@ test("make suggested changes right in a collection deck", async () => {
   assert.equal(place("Other Deck")["Counterspell"], 1, "a card in another deck stays there (proxy)");
   const sw = T.DECKMETA["Spells"].sugg.swaps; assert.ok(sw[0].done && sw[1].done && !sw[2].done);
   assert.equal(T.DECKMETA["Spells"].suggSig, T.deckSig("Spells"), "no 'deck changed' note after making the changes");
+});
+
+test("answers that suggest changes can be made right from Ask about this deck", async () => {
+  const { T } = loadPage();
+  await new Promise((r) => setImmediate(r));
+  const deck = ["Heliod, Sun-Crowned", "Walking Ballista", "Aluren", "Shrieking Drake", "Whitemane Lion", "Smothering Tithe", "Sol Ring"];
+  T.collAddMany(deck.map((n) => ({ n, q: 1 })).concat([{ n: "Forest", q: 30 }]), "add", "Counters");
+  T.collAddMany([{ n: "Armorcraft Judge", q: 1 }], "add", "");
+  // the answer from the screenshot: no CHANGES line, plain lists
+  const plainAnswer = `To bring your deck into a strong, fair Bracket 3 power level, cut the combos.
+Cards to remove:
+- Heliod, Sun-Crowned
+- Walking Ballista
+- Aluren
+- Shrieking Drake
+- Whitemane Lion
+- Smothering Tithe
+Cards to add (from your owned collection and precon cuts):
+- Armorcraft Judge
+- Arasta of the Endless Web
+- Rites of Flourishing
+- Octomancer
+- Jolly Gerbils
+- Communal Brewing
+Cutting the Heliod and Walking Ballista win condition removes the two-card infinite wins.`;
+  let r = T.splitChanges(plainAnswer, "Counters");
+  assert.deepEqual(plain(r.changes.cut), deck.slice(0, 6));
+  assert.equal(r.changes.add.length, 6);
+  assert.equal(r.changes.add[0], "Armorcraft Judge");
+  // tagged form wins and is hidden from the text
+  r = T.splitChanges('Cut Aluren for Rites.\n- Aluren\nCHANGES: {"cut":["aluren","Not In Deck"],"add":["Rites of Flourishing","Sol Ring"]}', "Counters");
+  assert.ok(!r.text.includes("CHANGES"));
+  assert.deepEqual(plain(r.changes), { cut: ["Aluren"], add: ["Rites of Flourishing"] }, "unknown cuts and cards already in the deck are dropped");
+  // make them, with one add unticked
+  const fake = (input, opts) => { opts.onText({ text: plainAnswer, delta: plainAnswer }); return Promise.resolve({ text: plainAnswer }); };
+  fake.json = async () => ({}); T.setSample(fake);
+  await T.askDeck("Counters", "bring this back down to a strong B3");
+  const ask = T.DECKMETA["Counters"].asks[0];
+  assert.equal(ask.changes.cut.length, 6);
+  T.applyAskChanges("Counters", ask.at);
+  const place = (loc) => Object.fromEntries([...T.COLL.values()].filter((v) => (v.loc || "") === loc).map((v) => [v.n, v.q]));
+  const d = place("Counters");
+  assert.equal(d["Aluren"], undefined); assert.equal(d["Heliod, Sun-Crowned"], undefined);
+  assert.equal(d["Armorcraft Judge"], 1); assert.equal(d["Octomancer"], 1); assert.equal(d["Sol Ring"], 1);
+  assert.equal(place("")["Armorcraft Judge"], undefined, "owned copy moved out of the general collection");
+  assert.equal(place("")["Aluren"], 1, "cut cards go back to the general collection");
+  assert.ok(T.DECKMETA["Counters"].asks[0].changes.done);
 });
