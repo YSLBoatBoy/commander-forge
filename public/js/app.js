@@ -1683,6 +1683,26 @@ function askHtml(t){
   String(t||"").replace(/\*\*/g,"").split("\n").forEach(l=>{ const m=l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)/); if(m){ ul.push(m[1]); return; } flush(); if(l.trim()) out.push(`<p>${esc(l.trim())}</p>`); });
   flush(); return out.join("");
 }
+// ---- make suggested swaps right in the collection deck ----
+const SWAPOFF={};            // loc -> Set of unticked swap indexes
+const SWAPBACK={v:true};     // put cut cards back in the general collection
+function applySwaps(loc){
+  const m=DECKMETA[loc]||{}, sg=m.sugg; if(!sg) return;
+  const off=SWAPOFF[loc]||new Set(); const pick=sg.swaps.map((x,i)=>i).filter(i=>!sg.swaps[i].done&&!off.has(i)); if(!pick.length) return;
+  const metaBefore=JSON.parse(JSON.stringify(m)); let adds=0, cuts=0, fromGen=0; const t=Date.now();
+  const undoColl=collMutate(()=>{
+    const take=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(!v) return false; if(v.q>1) v.q--; else COLL.delete(k); return true; };
+    const put=(n,place)=>{ const k=ckey(n,place), v=COLL.get(k); if(v) v.q++; else COLL.set(k,{n,q:1,t,loc:place}); };
+    pick.forEach(i=>{ const x=sg.swaps[i];
+      if(x.cut){ const real=deckEntries(loc).find(v=>key(v.n)===key(x.cut)); if(real&&take(real.n,loc)){ cuts++; if(SWAPBACK.v) put(real.n,""); } }
+      if(x.add){ const g=[...COLL.values()].find(v=>!v.loc&&key(v.n)===key(x.add)); const name=g?g.n:x.add; if(g){ take(g.n,""); fromGen++; } put(name,loc); adds++; }
+      x.done=true; });
+    return "all";
+  },true);
+  setMeta(loc,{sugg:sg,suggSig:deckSig(loc)});
+  renderDecks();
+  toast(`Made ${pick.length} change${pick.length>1?"s":""} to “${loc}”: +${adds} / −${cuts}${fromGen?` (${fromGen} moved from your general collection)`:""}.`,{label:"Undo",fn:()=>{ undoColl(); DECKMETA[loc]=metaBefore; persistMeta(); renderDecks(); toast("Changes undone."); }});
+}
 async function openDeckInBuilder(loc, playtest){
   const cmds=deckCommanders(loc), ck=new Set(cmds.map(key));
   const text=cmds.map(n=>`1x ${n} [Commander{top}]`).concat(deckEntries(loc).filter(v=>!ck.has(key(v.n))).map(v=>`${v.q} ${v.n}`)).join("\n");
@@ -1732,14 +1752,19 @@ function renderDeckDetail(){
       ${d.bracket?`<div class="small"><b>Estimated bracket ${d.bracket}.</b> ${esc(d.bracketWhy)}</div>`:""}
       <div class="note">Written ${ago(m.descAt)}${m.descModel?" by "+esc(m.descModel):""}.</div>`
     : '<p class="muted">No write-up yet. The AI reads the cards and explains the game plan, win conditions and weak spots.</p>';
-  const swapRow=x=>{ const ow=x.add&&owned(x.add), dd=x.add&&CARDDB[key(x.add)]; return `<li><span class="p">+ ${esc(x.add||"—")}</span>${ow?' <span class="tag own">Owned</span>':""}${dd&&dd.usd!=null?` <span class="muted small">${money(dd.usd)}</span>`:""}${x.cut?` <span class="m">− ${esc(x.cut)}</span>`:""}${x.why?`<div class="small muted">${esc(x.why)}</div>`:""}</li>`; };
+  const off=SWAPOFF[loc]||new Set(), here=new Set(deckEntries(loc).map(v=>key(v.n)));
+  const swapRow=(x,i)=>{ const ow=x.add&&owned(x.add), dd=x.add&&CARDDB[key(x.add)], cutGone=x.cut&&!here.has(key(x.cut));
+    const box=x.done?'<span class="tag info">Done</span>':`<input type="checkbox" data-swap="${i}" ${off.has(i)?"":"checked"} aria-label="Include this change">`;
+    return `<li class="${x.done?"done":""}"><label class="sw">${box}<span><span class="p">+ ${esc(x.add||"—")}</span>${ow?` <span class="tag own">Owned${ownedWhere(ow)?" · "+esc(ownedWhere(ow)):""}</span>`:""}${dd&&dd.usd!=null?` <span class="muted small">${money(dd.usd)}</span>`:""}${x.cut?` <span class="m">− ${esc(x.cut)}</span>${cutGone&&!x.done?' <span class="muted small">(not in the deck now)</span>':""}`:""}${x.why?`<div class="small muted">${esc(x.why)}</div>`:""}</span></label></li>`; };
+  const todo=sg?sg.swaps.map((x,i)=>i).filter(i=>!sg.swaps[i].done&&!off.has(i)):[];
+  const applyUi = sg&&sg.swaps.some(x=>!x.done) ? `<div class="row sw-apply"><button type="button" class="btn primary" data-dact="applysw" ${todo.length?"":"disabled"}>${todo.length?`Make ${todo.length===1?"this change":"these "+todo.length+" changes"}`:"Pick changes to make"}</button><label class="small"><input type="checkbox" data-swback ${SWAPBACK.v?"checked":""}> Put cut cards back in my general collection</label></div>` : "";
   const suggHtml = busy==="sugg" ? '<div class="progress"><span class="dot"></span> Working out how to pilot it and what to change…</div>'
     : sg ? `${sstale?'<div class="warnbox small">The deck changed since these suggestions were made.</div>':""}
       ${list("How to play it",sg.howToPlay)}
       ${sg.mulligan?`<div><span class="eyebrow">Mulligan</span><p class="small" style="margin:4px 0">${esc(sg.mulligan)}</p></div>`:""}
-      ${sg.swaps.length?`<div><span class="eyebrow">Suggested changes</span><ul class="dd-swaps">${sg.swaps.map(swapRow).join("")}</ul></div>`:""}
+      ${sg.swaps.length?`<div><span class="eyebrow">Suggested changes</span><ul class="dd-swaps">${sg.swaps.map(swapRow).join("")}</ul>${applyUi}</div>`:""}
       ${sg.styleShift?`<div><span class="eyebrow">A different direction</span><p class="small" style="margin:4px 0">${esc(sg.styleShift)}</p></div>`:""}
-      <div class="note">Made ${ago(m.suggAt)}. Open the deck in the builder to try these with live prices and the bracket check.</div>`
+      <div class="note">Made ${ago(m.suggAt)}. Tick the changes you want and make them here, or open the deck in the builder to try them with live prices first.</div>`
     : '<p class="muted">Get piloting tips, mulligan advice and specific swaps. Adds favor cards you already own.</p>';
   el.innerHTML=`<div class="deckdetail">
     <div class="dd-head"><span class="dt-band" style="${bandStyle(cols)}"></span>
@@ -2631,6 +2656,8 @@ $("deckGrid").addEventListener("click",e=>{
   if(OPENDECK){ loadDeckData(loc); const dd=$("deckDetail"); dd.scrollIntoView&&dd.scrollIntoView({behavior:"smooth",block:"nearest"}); }
 });
 $("deckDetail").addEventListener("change",e=>{
+  if(e.target.matches&&e.target.matches("[data-swap]")&&OPENDECK){ const set=SWAPOFF[OPENDECK]=SWAPOFF[OPENDECK]||new Set(), i=Number(e.target.dataset.swap); if(e.target.checked) set.delete(i); else set.add(i); renderDecks(); return; }
+  if(e.target.matches&&e.target.matches("[data-swback]")){ SWAPBACK.v=e.target.checked; return; }
   const ps=e.target.closest("[data-dpre]"); if(ps&&OPENDECK){ setMeta(OPENDECK,{precon:ps.value}); renderDecks(); toast(ps.value==="none"?"This deck won't be compared with a precon.":"Questions will compare with "+ps.options[ps.selectedIndex].text.split(" · ")[0]+"."); return; }
   const sel=e.target.closest("[data-dcmd]"); if(!sel||!OPENDECK) return;
   const cur=deckCommanders(OPENDECK).slice(); const i=Number(sel.dataset.dcmd);
@@ -2646,6 +2673,7 @@ $("deckDetail").addEventListener("click",e=>{
   if(act==="open") return openDeckInBuilder(loc,false);
   if(act==="desc") return describeDeck(loc);
   if(act==="sugg") return suggestDeck(loc);
+  if(act==="applysw") return applySwaps(loc);
   if(act==="ask"){ const t=$("deckDetail").querySelector("[data-ask-in]"); return askDeck(loc,t&&t.value); }
   if(act==="askclear"){ setMeta(loc,{asks:[]}); renderDecks(); return; }
   if(act==="rename"){ const inp=$("deckDetail").querySelector("[data-dact-name]"); const to=(inp&&inp.value||"").trim(); if(!to||to===loc) return; if(decksList().some(d=>d.name===to)){ toast(`There's already a deck called “${to}”. Pick another name.`); return; } const undo=renameDeck(loc,to); renderCollection(); toast(`Renamed to “${to}”.`,{label:"Undo",fn:()=>{ undo(); if(DECKMETA[to]){ DECKMETA[loc]=DECKMETA[to]; delete DECKMETA[to]; persistMeta(); } OPENDECK=loc; renderCollection(); }}); return; }

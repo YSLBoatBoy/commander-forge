@@ -383,6 +383,12 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .dd-cols ul,.dd-panel ul{margin:4px 0 0;padding-left:18px;display:grid;gap:3px}
 .dd-swaps{list-style:none;padding-left:0!important}
 .dd-swaps li{padding:6px 0;border-bottom:1px solid var(--line)}
+.dd-swaps .sw{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.dd-swaps .sw input{margin-top:3px;accent-color:var(--accent);flex:none}
+.dd-swaps li.done{opacity:.6}
+.dd-swaps li.done .sw{cursor:default}
+.sw-apply{margin-top:10px;gap:12px;flex-wrap:wrap;align-items:center}
+.sw-apply label{display:flex;gap:6px;align-items:center}
 .dd-swaps .p{color:var(--ok);font-weight:700} .dd-swaps .m{color:var(--bad);font-weight:700;margin-left:8px}
 .mobilebar{display:none}
 @media (max-width:980px){.mobilebar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:5;gap:10px;align-items:center;justify-content:space-between;background:var(--fg);color:var(--bg);

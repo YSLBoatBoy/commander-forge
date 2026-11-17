@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -416,4 +416,25 @@ test("saving a deck opened from My collection updates that deck", async () => {
   assert.equal(after["Talrand, Sky Summoner"], 1);
   assert.equal(T.DIRTY, false);
   assert.ok(T.buildsAll()["Talrand Spells"], "a copy is also in Saved builds");
+});
+
+test("make suggested changes right in a collection deck", async () => {
+  const { T } = loadPage();
+  T.collAddMany([{ n: "Opt", q: 1 }, { n: "Ponder", q: 1 }, { n: "Divination", q: 1 }, { n: "Island", q: 30 }], "add", "Spells");
+  T.collAddMany([{ n: "Brainstorm", q: 2 }], "add", "");
+  T.collAddMany([{ n: "Counterspell", q: 1 }], "add", "Other Deck");
+  T.setMeta("Spells", { sugg: { howToPlay: [], mulligan: "", styleShift: "", swaps: [
+    { add: "Brainstorm", cut: "Opt", why: "" }, { add: "Counterspell", cut: "Ponder", why: "" }, { add: "Mystic Remora", cut: "Divination", why: "" } ] }, suggSig: T.deckSig("Spells") });
+  T.SWAPOFF["Spells"] = new Set([2]);
+  T.applySwaps("Spells");
+  const place = (loc) => Object.fromEntries([...T.COLL.values()].filter((v) => (v.loc || "") === loc).map((v) => [v.n, v.q]));
+  const deck = place("Spells"), gen = place("");
+  assert.equal(deck["Brainstorm"], 1); assert.equal(deck["Counterspell"], 1);
+  assert.equal(deck["Opt"], undefined); assert.equal(deck["Ponder"], undefined);
+  assert.equal(deck["Divination"], 1, "unticked change is skipped"); assert.equal(deck["Mystic Remora"], undefined);
+  assert.equal(gen["Brainstorm"], 1, "one copy moved out of the general collection");
+  assert.equal(gen["Opt"], 1); assert.equal(gen["Ponder"], 1);
+  assert.equal(place("Other Deck")["Counterspell"], 1, "a card in another deck stays there (proxy)");
+  const sw = T.DECKMETA["Spells"].sugg.swaps; assert.ok(sw[0].done && sw[1].done && !sw[2].done);
+  assert.equal(T.DECKMETA["Spells"].suggSig, T.deckSig("Spells"), "no 'deck changed' note after making the changes");
 });
