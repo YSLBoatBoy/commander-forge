@@ -30,6 +30,8 @@ No npm dependencies on purpose. Node ≥ 22.13 (Docker uses node:24-alpine).
 1. **Self-hosted** (`SERVER === true`, detected by `GET api/health` at boot): live data via `api/proxy`, AI via `api/ai` (`serverSample`), collection/builds/state via the API, downloads via Blob links.
 2. **Claude artifact** (`window.claude` present): live data via the Claude desktop browser (`host:claude_browser` MCP: `preview_start`, `navigate`, `get_page_text`), AI via `claude.use("sample")`, collection via `claude.use("db")` under `data/users/<id>/coll-<letter>`. Published artifact: https://claude.ai/artifact/MjjxP5LCQx3EHdaLjxVsxD (republish `dist/commander-forge.html` after `npm run build:artifact`, capabilities: sample, downloads, db, user, mcp host:claude_browser [preview_start, navigate, get_page_text]).
 
+Claude storage (`claude.use("db")`) returns frozen objects: anything kept and edited later goes through `plainCopy()` (DECKMETA, card details).
+
 Key indirections: `browserGet(url)` (data), `sample(input, opts)` / `sample.json` (AI; same contract in both modes: `onText({text,delta})`, `signal`, `modelTier: "quick"|"default"`), `buildsAll/buildsPut/buildsDel`, `flushColl/initCollectionStore`.
 
 ## API

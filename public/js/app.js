@@ -1343,6 +1343,8 @@ async function flushColl(){
   flushing=false;
   if(dirty.size) scheduleFlush();
 }
+// Claude's storage returns read-only (frozen) objects; anything the page edits later must be a plain copy.
+function plainCopy(x){ try{ return JSON.parse(JSON.stringify(x)); }catch(e){ return x; } }
 async function initCollectionStore(){
   if(SERVER){
     try{
@@ -1360,7 +1362,7 @@ async function initCollectionStore(){
     const id=await user.id(); if(!id){ setSync("local"); return; }
     cdb=db; cuid=id;
     const snap=await db.collection("data/users/"+id).get();
-    snap.docs.filter(d=>d.exists&&/^cards-/.test(d.id)).forEach(d=>{ ((d.data()||{}).items||[]).forEach(([k,c])=>{ if(k&&c&&c.name&&!CARDDB[k]) CARDDB[k]=c; }); });
+    snap.docs.filter(d=>d.exists&&/^cards-/.test(d.id)).forEach(d=>{ ((d.data()||{}).items||[]).forEach(([k,c])=>{ if(k&&c&&c.name&&!CARDDB[k]) CARDDB[k]=plainCopy(c); }); });
     const docs=snap.docs.filter(d=>d.exists&&/^coll-/.test(d.id));
     if(docs.length){
       COLL.clear();
@@ -1594,7 +1596,7 @@ function loadMetaLocal(){ try{ DECKMETA=JSON.parse(localStorage.getItem("cforge.
 async function loadMetaRemote(){
   try{
     if(SERVER){ const j=await fetch("api/decks").then(r=>r.json()); if(j&&j.decks&&typeof j.decks==="object") DECKMETA=j.decks; }
-    else if(cdb&&cuid){ const d=await cdb.doc(`data/users/${cuid}/meta-decks`).get(); if(d.exists) DECKMETA=(d.data()||{}).decks||{}; }
+    else if(cdb&&cuid){ const d=await cdb.doc(`data/users/${cuid}/meta-decks`).get(); if(d.exists) DECKMETA=plainCopy((d.data()||{}).decks||{}); }
     try{ localStorage.setItem("cforge.deckmeta",JSON.stringify(DECKMETA)); }catch(e){}
   }catch(e){}
   renderDecks();

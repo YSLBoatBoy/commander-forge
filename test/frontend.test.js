@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,splitChanges,applyAskChanges,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,loadMetaRemote,set CDB(v){cdb=v;cuid=v?'u1':null;},splitChanges,applyAskChanges,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -502,4 +502,17 @@ test("deck prompts carry the app's own Game Changer count", async () => {
   assert.match(prompt, /Rhystic Study \| .*GAME CHANGER|1 Rhystic Study \| GAME CHANGER/);
   assert.ok(!/Sol Ring[^\n]*GAME CHANGER/.test(prompt) && !/Void Winnower[^\n]*GAME CHANGER/.test(prompt));
   assert.match(prompt, /at least 4/);
+});
+
+test("decks loaded from Claude's storage can still be changed (it returns frozen objects)", async () => {
+  const { T } = loadPage();
+  const deep = (o) => { Object.values(o).forEach((v) => v && typeof v === "object" && deep(v)); return Object.freeze(o); };
+  const stored = deep({ decks: { Yennett: { commanders: ["Yennett, Cryptic Sovereign"], asks: [{ q: "a", a: "b", at: 1 }] } } });
+  T.CDB = { doc: () => ({ get: async () => ({ exists: true, data: () => stored }), set: async () => {} }), collection: () => ({ get: async () => ({ docs: [] }) }) };
+  await T.loadMetaRemote();
+  T.setMeta("Yennett", { asks: [{ q: "new", a: "c", at: 2 }].concat(T.DECKMETA.Yennett.asks) });
+  T.setMeta("Other", { commanders: [] });
+  assert.equal(T.DECKMETA.Yennett.asks.length, 2);
+  T.DECKMETA.Yennett.asks[1].changes = null;
+  T.CDB = null;
 });
