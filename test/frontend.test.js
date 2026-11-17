@@ -484,4 +484,8 @@ Cutting the Heliod and Walking Ballista win condition removes the two-card infin
   assert.equal(place("")["Armorcraft Judge"], undefined, "owned copy moved out of the general collection");
   assert.equal(place("")["Aluren"], 1, "cut cards go back to the general collection");
   assert.ok(T.DECKMETA["Counters"].asks[0].changes.done);
+  // an answer saved before this feature still gets its changes picked out
+  T.setMeta("Counters", { asks: [{ q: "old", a: "Cards to remove:\n- Sol Ring\nCards to add:\n- Arcane Signet", at: 1 }] });
+  T.applyAskChanges("Counters", 1);
+  assert.equal(place("Counters")["Arcane Signet"], 1); assert.equal(place("Counters")["Sol Ring"], undefined);
 });

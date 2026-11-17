@@ -1716,6 +1716,7 @@ function applyDeckChanges(loc,cuts,adds,back){
 }
 const ASKOFF={};   // "loc|at" -> Set of "c:name" / "a:name" left unticked
 function askChangesUi(loc,x){
+  if(x.changes===undefined&&x.a) x.changes=splitChanges(x.a,loc).changes;   // answers saved before changes were tracked
   const ch=x.changes; if(!ch) return "";
   const id=loc+"|"+x.at, off=ASKOFF[id]||new Set(), here=new Set(deckEntries(loc).map(v=>key(v.n)));
   const item=(kind,n)=>{ const tag=kind+":"+n, ow=kind==="a"&&owned(n), gone=kind==="c"&&!here.has(key(n)), dd=CARDDB[key(n)];
@@ -1727,7 +1728,9 @@ function askChangesUi(loc,x){
   </div>`;
 }
 function applyAskChanges(loc,at){
-  const m=DECKMETA[loc]||{}, asks=m.asks||[], x=asks.find(y=>String(y.at)===String(at)); if(!x||!x.changes||x.changes.done) return;
+  const m=DECKMETA[loc]||{}, asks=m.asks||[], x=asks.find(y=>String(y.at)===String(at)); if(!x) return;
+  if(x.changes===undefined&&x.a) x.changes=splitChanges(x.a,loc).changes;
+  if(!x.changes||x.changes.done) return;
   const off=ASKOFF[loc+"|"+x.at]||new Set();
   const cuts=x.changes.cut.filter(c=>!off.has("c:"+c)), adds=x.changes.add.filter(a=>!off.has("a:"+a)); if(!cuts.length&&!adds.length) return;
   const metaBefore=JSON.parse(JSON.stringify(m));
