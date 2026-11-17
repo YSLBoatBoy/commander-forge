@@ -412,3 +412,18 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 @media (hover:none){.tact{opacity:1}}
 .cardpeek{position:fixed;z-index:60;width:244px;height:340px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.45);pointer-events:none;background:var(--sunk);opacity:0;transition:opacity .1s}
 .cardpeek.ok{opacity:1}
+
+/* ---- bracket badge (deck tiles and deck header) ---- */
+.bkt{display:inline-flex;align-items:center;gap:0;font:700 .74rem/1 var(--f-body,inherit);letter-spacing:.02em;padding:3px 8px;border-radius:99px;border:1px solid transparent;white-space:nowrap;vertical-align:middle}
+.bkt span{font-weight:600;opacity:.85;margin-left:.35em}
+.bkt.b1{background:color-mix(in srgb,#5aa469 18%,transparent);border-color:color-mix(in srgb,#5aa469 45%,transparent);color:#3f8a50}
+.bkt.b2{background:color-mix(in srgb,#4a90c2 18%,transparent);border-color:color-mix(in srgb,#4a90c2 45%,transparent);color:#2f74a8}
+.bkt.b3{background:color-mix(in srgb,#d39b2a 20%,transparent);border-color:color-mix(in srgb,#d39b2a 50%,transparent);color:#a8741a}
+.bkt.b4{background:color-mix(in srgb,#d1553c 18%,transparent);border-color:color-mix(in srgb,#d1553c 45%,transparent);color:#b23f28}
+.bkt.b5{background:color-mix(in srgb,#9b4fc4 18%,transparent);border-color:color-mix(in srgb,#9b4fc4 45%,transparent);color:#8137aa}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .bkt.b1{color:#8fd29c}:root:not([data-theme="light"]) .bkt.b2{color:#8cc3ea}:root:not([data-theme="light"]) .bkt.b3{color:#f0c46a}:root:not([data-theme="light"]) .bkt.b4{color:#f29a85}:root:not([data-theme="light"]) .bkt.b5{color:#cf9cec}}
+:root[data-theme="dark"] .bkt.b1{color:#8fd29c}:root[data-theme="dark"] .bkt.b2{color:#8cc3ea}:root[data-theme="dark"] .bkt.b3{color:#f0c46a}:root[data-theme="dark"] .bkt.b4{color:#f29a85}:root[data-theme="dark"] .bkt.b5{color:#cf9cec}
+.dt-row .bkt{margin-left:4px}
+.dt-row .bkt span{display:none}
+.bkline{display:flex;gap:10px;align-items:flex-start;background:var(--sunk);border-radius:var(--r);padding:10px 12px;line-height:1.45}
+.bkline .bkt{flex:none;margin-top:1px}

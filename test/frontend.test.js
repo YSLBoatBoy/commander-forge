@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -371,4 +371,24 @@ test("card type view groups cards like Archidekt", async () => {
   assert.equal(g("Teferi, Time Raveler"), "Planeswalkers");
   assert.equal(g("Invasion of Ikoria"), "Battles");
   assert.equal(g("Never Looked Up"), "Type not known yet");
+});
+
+test("deck bracket follows the official rules", async () => {
+  const { T } = loadPage();
+  const fill = (loc, extra) => T.collAddMany([{ n: "Island", q: 30 }].concat(extra.map((n) => ({ n, q: 1 }))), "add", loc);
+  fill("Casual", ["Opt", "Counterspell"]);
+  let b = T.deckBracket("Casual"); assert.equal(b.floor, 1); assert.equal(b.level, 2);
+  fill("Two GC", ["Rhystic Study", "Smothering Tithe", "Opt"]);
+  b = T.deckBracket("Two GC"); assert.equal(b.level, 3); assert.equal(b.gc.length, 2);
+  fill("Four GC", ["Rhystic Study", "Smothering Tithe", "Cyclonic Rift", "Demonic Tutor"]);
+  assert.equal(T.deckBracket("Four GC").level, 4);
+  fill("Stax", ["Armageddon"]);
+  assert.equal(T.deckBracket("Stax").level, 4);
+  T.putCard({ name: "Time Warp", type: "Sorcery", ci: ["U"], legal: "legal", mv: 5, text: "Target player takes an extra turn after this one." });
+  fill("Turns", ["Time Warp"]);
+  b = T.deckBracket("Turns"); assert.equal(b.level, 2); assert.equal(b.xt.length, 1);
+  T.setMeta("Casual", { combos: { sig: T.deckSig("Casual"), list: ["Opt + Counterspell"] } });
+  assert.equal(T.deckBracket("Casual").level, 3);
+  T.setMeta("Two GC", { desc: { bracket: 4, summary: "x" }, descSig: T.deckSig("Two GC") });
+  assert.equal(T.deckBracket("Two GC").level, 4, "AI estimate can raise it");
 });

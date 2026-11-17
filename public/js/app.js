@@ -1480,6 +1480,43 @@ function deckStats(loc){
   e.forEach(v=>{ const d=CARDDB[key(v.n)]; if(d&&d.usd!=null){ value+=d.usd*v.q; priced++; } const isLand=BASIC_NAMES.test(v.n)||(d&&/\bLand\b/.test(d.type)&&!/Creature/.test(d.type)); if(isLand) lands+=v.q; else if(d){ mvSum+=d.mv*v.q; mvN+=v.q; } if(isGC(v.n)||(d&&d.gc)) gc++; });
   return {copies:deckCopies(loc), value, priced, known:e.filter(v=>CARDDB[key(v.n)]).length, total:e.length, lands, avgMv:mvN?mvSum/mvN:null, gc};
 }
+// ---- bracket for decks in the collection: official rules in code, plus the AI estimate when there's a write-up ----
+const MLD_CARDS=new Set(["Armageddon","Ravages of War","Catastrophe","Decree of Annihilation","Jokulhaups","Obliterate","Ruination","Sunder","Boom // Bust","Wildfire","Impending Disaster","Destructive Force","Global Ruin","Keldon Firebombers","Epicenter","Desolation Angel","Rising Waters","Winter Orb","Static Orb","Back to Basics","Blood Moon","Magus of the Moon","Contamination","Hokori, Dust Drinker","Tangle Wire","Thoughts of Ruin","Numot, the Devastator","Burning of Xinye","Devastation","Apocalypse","Acid Rain","Flashfires","Myojin of Infinite Rage"].map(n=>n.toLowerCase()));
+const MLD_RE=/\b(destroy|exile|return) all (nonbasic )?lands\b|each player sacrifices (all|half the|\w+) lands|lands don't untap|players can't play lands/i;
+const XTURN_RE=/takes? (an|two|\w+) extra turns? after this one/i;
+function cardFacts(n){ const d=CARDDB[key(n)], t=(d&&d.text)||""; return {gc:isGC(n)||!!(d&&d.gc), mld:MLD_CARDS.has(key(n))||MLD_RE.test(t), xturn:XTURN_RE.test(t)}; }
+function deckBracket(loc){
+  const names=[...new Set(deckEntries(loc).map(v=>v.n).concat(deckCommanders(loc)))];
+  const gc=[], mld=[], xt=[]; names.forEach(n=>{ const f=cardFacts(n); if(f.gc) gc.push(n); if(f.mld) mld.push(n); if(f.xturn) xt.push(n); });
+  const m=DECKMETA[loc]||{}, sig=deckSig(loc), cb=m.combos&&m.combos.sig===sig?m.combos:null;
+  const two=cb?cb.list:[];
+  let floor=1; const why=[];
+  if(gc.length){ floor=Math.max(floor,gc.length>3?4:3); why.push(`${gc.length} Game Changer${gc.length>1?"s":""} (${gc.slice(0,6).join(", ")}${gc.length>6?"…":""})`+(gc.length>3?": more than 3 means bracket 4":"")); }
+  if(mld.length){ floor=Math.max(floor,4); why.push(`mass land denial (${mld.join(", ")}) means bracket 4`); }
+  if(xt.length){ floor=Math.max(floor,xt.length>=3?4:2); why.push(`${xt.length} extra-turn card${xt.length>1?"s":""} (${xt.join(", ")})${xt.length>=3?": enough to chain, so bracket 4":""}`); }
+  if(two.length){ floor=Math.max(floor,3); why.push(`two-card combo${two.length>1?"s":""}: ${two.slice(0,3).join("; ")}${two.length>3?"…":""} (bracket 3 at least, 4 if it can win early)`); }
+  const ai=m.desc&&Number(m.desc.bracket)&&m.descSig===sig?Math.round(Number(m.desc.bracket)):null;
+  const level=Math.min(5,Math.max(floor, ai||0, 2));
+  return {level, floor, ai, gc, mld, xt, combos:two, combosChecked:!!cb, why, name:BRACKETS[level].name};
+}
+const bracketBadge = b => `<span class="bkt b${b.level}" title="${esc("Bracket "+b.level+" · "+b.name+(b.why.length?": "+b.why.join("; "):""))}">B${b.level}<span>· ${esc(b.name)}</span></span>`;
+// Two-card combos fully in the deck, from Commander Spellbook (needs live data). Cached per deck until the cards change.
+const COMBOBUSY={};
+async function checkDeckCombos(loc){
+  if(!LIVE||COMBOBUSY[loc]) return; const m=DECKMETA[loc]||{}, sig=deckSig(loc); if(m.combos&&m.combos.sig===sig) return;
+  const names=[...new Set(deckEntries(loc).filter(v=>!BASIC_NAMES.test(v.n)).map(v=>v.n).concat(deckCommanders(loc)))]; if(names.length<10) return;
+  COMBOBUSY[loc]=true; const has=new Set(names.flatMap(n=>[key(n),key(n).split(" // ")[0]])); const ci=(deckColors(loc).join("")||"wubrg").toLowerCase();
+  const list=[]; const seen=new Set();
+  try{
+    for(let i=0;i<names.length;i+=45){
+      const q=`coloridentity<=${ci} (${names.slice(i,i+45).map(n=>'card="'+n.replace(/"/g,"")+'"').join(" or ")})`;
+      const j=await browserGet("https://backend.commanderspellbook.com/variants/?format=json&limit=100&ordering=-popularity&q="+encodeURIComponent(q));
+      (j.results||[]).forEach(v=>{ if(seen.has(v.id)) return; seen.add(v.id); const cards=(v.uses||[]).map(u=>u.card&&u.card.name).filter(Boolean); if(cards.length===2&&cards.every(n=>has.has(key(n))||has.has(key(n).split(" // ")[0]))&&(!v.legalities||v.legalities.commander!==false)&&(v.produces||[]).some(p=>/infinite|win the game/i.test(p.feature&&p.feature.name||""))) list.push(cards.join(" + ")); });
+    }
+    setMeta(loc,{combos:{sig,list:[...new Set(list)],at:Date.now()}});
+  }catch(e){ if(isLiveFatal(e)){ LIVE=false; renderLive(); } }
+  delete COMBOBUSY[loc]; renderDecks();
+}
 function setMeta(loc,patch){ DECKMETA[loc]=Object.assign({},DECKMETA[loc]||{},patch); persistMeta(); }
 function persistMeta(){ try{ localStorage.setItem("cforge.deckmeta",JSON.stringify(DECKMETA)); }catch(e){} clearTimeout(metaT); metaT=setTimeout(pushMeta,600); }
 async function pushMeta(){ try{ if(SERVER) await fetch("api/decks",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({decks:DECKMETA})}); else if(cdb&&cuid) await cdb.doc(`data/users/${cuid}/meta-decks`).set({decks:DECKMETA}); }catch(e){} }
@@ -1506,7 +1543,7 @@ function deckListText(loc){
 function deckCmdText(loc){ const c=deckCommanders(loc); return c.length ? c.map(n=>{ const d=CARDDB[key(n)]; return n+(d&&d.text?" — "+d.text.replace(/\n/g," "):""); }).join(" | ") : "not set; infer the most likely commander from the list"; }
 const firstObj = r => Array.isArray(r) ? (r.find(x=>x&&typeof x==="object"&&!Array.isArray(x))||{}) : (r&&typeof r==="object"?r:{});
 const arr = (x,n) => (Array.isArray(x)?x:x?[x]:[]).map(v=>typeof v==="object"&&v?(v.text||v.name||v.n||JSON.stringify(v)):String(v)).filter(Boolean).slice(0,n||8);
-async function loadDeckData(loc){ if(LIVE){ await liveTry(()=>scryNames(deckEntries(loc).map(v=>v.n))); } renderDecks(); }
+async function loadDeckData(loc){ if(LIVE){ await liveTry(()=>scryNames(deckEntries(loc).map(v=>v.n))); } renderDecks(); if(LIVE&&OPENDECK===loc) checkDeckCombos(loc); }
 async function describeDeck(loc){
   if(needClaude()) return;
   DECKBUSY[loc]="desc"; delete DECKERR[loc]; renderDecks();
@@ -1643,7 +1680,7 @@ function renderDecks(){
       <span class="dt-band" style="${bandStyle(cols)}"></span>
       <span class="dt-name">${esc(d.name)}</span>
       <span class="dt-cmd">${cmds.length?esc(cmds.join(" + ")):'<span class="muted">Commander not set</span>'}</span>
-      <span class="dt-row">${cols.length?colorPips(cols):""}<span class="dt-meta">${st.copies} card${st.copies===1?"":"s"}${st.copies===100?" · full deck":""}${st.priced?" · "+money(st.value):""}</span></span>
+      <span class="dt-row">${cols.length?colorPips(cols):""}${bracketBadge(deckBracket(d.name))}<span class="dt-meta">${st.copies} card${st.copies===1?"":"s"}${st.copies===100?" · full deck":""}${st.priced?" · "+money(st.value):""}</span></span>
       <span class="dt-sum">${line?esc(line):'<span class="muted">No write-up yet</span>'}</span>
     </button>`; }).join("");
   renderDeckDetail();
@@ -1657,6 +1694,7 @@ function renderDeckDetail(){
       <label class="f">Partner (optional)<select data-dcmd="1"><option value="">No partner</option>${cand.filter(n=>!cmds[0]||key(n)!==key(cmds[0])).map(n=>`<option value="${esc(n)}" ${cmds[1]&&key(cmds[1])===key(n)?"selected":""}>${esc(n)}</option>`).join("")}</select></label>`
     : `<div class="note">None of this deck's cards is a legal commander. Add your commander with “Where are these cards?” set to this deck.</div>`;
   const d=m.desc, stale=d&&m.descSig!==sig, sg=m.sugg, sstale=sg&&m.suggSig!==sig;
+  const bk=deckBracket(loc);
   const list=(t,a)=>a&&a.length?`<div><span class="eyebrow">${t}</span><ul>${a.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:"";
   const descHtml = busy==="desc" ? '<div class="progress"><span class="dot"></span> Reading the deck and writing how it works…</div>'
     : d ? `${stale?'<div class="warnbox small">The cards or commander changed since this was written. Regenerate to update it.</div>':""}
@@ -1681,6 +1719,7 @@ function renderDeckDetail(){
       <div class="dd-cmd">${cmdUi}</div>
     </div>
     ${st.copies!==100?`<div class="warnbox small">This deck has ${st.copies} cards; a Commander deck has 100 including the commander.</div>`:""}
+    <div class="bkline small">${bracketBadge(bk)} <span><b>Bracket ${bk.level} (${esc(bk.name)}).</b> ${bk.why.length?esc(bk.why.join("; "))+".":bk.ai?"":"No Game Changers, mass land denial, extra turns or two-card combos, so the rules allow bracket 1 or 2."}${bk.ai?` The AI write-up estimates bracket ${bk.ai}${bk.ai>bk.floor&&bk.floor>1?" (stronger than the rules alone show)":""}.`:""}${bk.combosChecked?"":LIVE?(COMBOBUSY[loc]?" Checking Commander Spellbook for combos…":""):" Combos aren't checked without live card data."}</span></div>
     ${err?`<div class="err small">${esc(err.msg)}</div>`:""}
     <div class="row">
       <button type="button" class="btn primary" data-dact="playtest">Playtest</button>
