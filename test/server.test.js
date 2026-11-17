@@ -245,3 +245,24 @@ test("card details are kept between visits", async () => {
   assert.deepEqual((await api("/api/cards")).json.cards, [["sol ring", { ...card, usd: 2 }, 456]]);
   assert.equal((await api("/api/cards", { method: "POST", body: {} })).status, 400);
 });
+
+test("a JSON answer that stops early is retried before anything reaches the page", async () => {
+  const { runAi } = await import("../server/ai.js");
+  const cfg = { provider: "gemini", autoFallback: true, gemini: { key: "k", model: "gemini-a", fast: "gemini-b" }, anthropic: {} };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    if (calls === 1) return new Response(sse([{ candidates: [{ content: { parts: [{ text: '{"overview":"Yennett rewards' }] }, finishReason: "RECITATION" }] }]), { status: 200 });
+    return new Response(sse([{ candidates: [{ content: { parts: [{ text: '{"overview":"ok","plans":[]}' }] }, finishReason: "STOP" }] }]), { status: 200 });
+  };
+  let got = "";
+  const out = await runAi(cfg, { prompt: "x", tier: "quick", json: true, onDelta: (t) => { got += t; }, fetchImpl });
+  assert.equal(calls, 2);
+  assert.equal(got, '{"overview":"ok","plans":[]}', "the cut-short first answer never reached the page");
+  assert.equal(out.skipped[0].code, "cut");
+  // plain text that stops early is passed through but flagged
+  const out2 = await runAi(cfg, { prompt: "x", tier: "quick", json: false, onDelta() {}, fetchImpl: async () => new Response(sse([{ candidates: [{ content: { parts: [{ text: "Half an answ" }] }, finishReason: "SAFETY" }] }]), { status: 200 }) });
+  assert.equal(out2.finish, "cut");
+  // every attempt cut short: a clear error
+  await assert.rejects(runAi(cfg, { prompt: "x", tier: "quick", json: true, onDelta() {}, fetchImpl: async () => new Response(sse([{ candidates: [{ content: { parts: [{ text: '{"a":' }] } }] }]), { status: 200 }) }), (e) => e.code === "cut" && /stopped early/.test(e.message));
+});

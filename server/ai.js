@@ -57,7 +57,11 @@ export async function geminiStream({ key, model, prompt, json, signal, onDelta, 
     const t = (cand?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
     if (t) onDelta(t);
   });
-  return { finish: finish === "MAX_TOKENS" ? "length" : "stop" };
+  // STOP is a normal end; anything else (RECITATION, SAFETY, OTHER, or no reason at all) means the answer was cut short.
+  if (finish === "MAX_TOKENS") return { finish: "length" };
+  if (finish && finish !== "STOP") return { finish: "cut", reason: finish };
+  if (!finish) return { finish: "cut", reason: "stream ended" };
+  return { finish: "stop" };
 }
 
 export async function anthropicStream({ key, model, prompt, json, signal, onDelta, fetchImpl = fetch }) {
@@ -86,7 +90,15 @@ export const ORDER = {
   anthropic: ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"],
 };
 // Errors where trying another model can help (only before any text has streamed).
-const FALLBACK_ON = new Set(["overloaded", "rate_limited", "timeout", "bad_model", "upstream_error", "unreachable"]);
+const FALLBACK_ON = new Set(["overloaded", "rate_limited", "timeout", "bad_model", "upstream_error", "unreachable", "cut"]);
+// Same leniency as the page's parseLoose: plain JSON, a ```json fence, or the outermost {...} / [...].
+export function looksLikeJson(t) {
+  const tryParse = (x) => { try { JSON.parse(x); return true; } catch { return false; } };
+  if (tryParse(t)) return true;
+  const f = t.match(/```(?:json)?\s*([\s\S]*?)```/); if (f && tryParse(f[1])) return true;
+  const a = [t.indexOf("{"), t.indexOf("[")].filter((x) => x >= 0).sort((x, y) => x - y)[0], b = Math.max(t.lastIndexOf("}"), t.lastIndexOf("]"));
+  return a != null && b > a && tryParse(t.slice(a, b + 1));
+}
 
 // Settings come from the database, with environment variables taking priority.
 export function resolveAi(db, env = process.env) {
@@ -173,19 +185,31 @@ export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImp
   const p = cfg.provider === "anthropic" ? "anthropic" : "gemini";
   const c = cfg[p];
   if (!c.key) throw new AiError("no_key", p === "gemini" ? "Add a Google Gemini API key in AI engine settings." : "Add an Anthropic API key in AI engine settings.", 400);
-  const list = candidates(cfg, p, tier);
+  const base = candidates(cfg, p, tier);
+  // JSON answers are held back until they're complete and parse, so a cut-short answer can be retried:
+  // the first model gets a second try, then the fallback list (when auto-fallback is on).
+  const list = json ? [base[0], ...base] : base;
   const skipped = [];
   let last;
   for (const model of list) {
     const started = Date.now();
+    let buf = "";
     try {
-      const out = await attempt(p, model, c.key, { prompt, json, signal, fetchImpl, timeouts, onDelta: (t) => onDelta(t, model, skipped) });
+      const out = await attempt(p, model, c.key, { prompt, json, signal, fetchImpl, timeouts, onDelta: json ? (t) => { buf += t; } : (t) => onDelta(t, model, skipped) });
+      if (json) {
+        if (out.finish !== "stop" || !looksLikeJson(buf)) {
+          const why = out.finish === "length" ? "ran out of room" : out.finish === "cut" ? `stopped early (${out.reason})` : "didn't send valid JSON";
+          throw Object.assign(new AiError("cut", `${p === "gemini" ? "Gemini" : "Claude"} (${model}) ${why}.`, 502), { streamed: false });
+        }
+        onDelta(buf, model, skipped);
+      }
       if (process.env.AI_LOG !== "0") console.log(`[ai] ${p} ${model} ok ${Date.now() - started}ms${skipped.length ? " after " + skipped.map((s) => s.model + ":" + s.code).join(", ") : ""}`);
       return { ...out, model, skipped };
     } catch (e) {
       if (signal?.aborted) throw e;
       last = e;
       if (process.env.AI_LOG !== "0") console.log(`[ai] ${p} ${model} failed (${e.code}): ${e.message}`);
+      if (json) e.streamed = false;   // nothing reached the page yet
       if (e.streamed || !FALLBACK_ON.has(e.code)) throw e;
       skipped.push({ model, code: e.code });
     }
@@ -194,7 +218,7 @@ export async function runAi(cfg, { prompt, tier, json, signal, onDelta, fetchImp
     const allBusy = skipped.every((s) => s.code === "overloaded" || s.code === "rate_limited");
     throw new AiError(last.code, allBusy
       ? `Every ${p === "gemini" ? "Gemini" : "Claude"} model is busy right now (tried ${skipped.map((s) => s.model).join(", ")}). Wait a minute and try again.`
-      : `${last.message} Also tried: ${skipped.map((s) => s.model).join(", ")}.`, last.status);
+      : `${last.message} Also tried: ${[...new Set(skipped.map((s) => s.model))].filter((m) => m !== list[list.length - 1] || skipped.filter((x) => x.model === m).length > 1).join(", ")}.`, last.status);
   }
   throw last;
 }

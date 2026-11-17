@@ -135,6 +135,7 @@ export function createServer({ dataDir = process.env.DATA_DIR || path.resolve(__
           });
           if (!started) return send(res, 502, { code: "empty_completion", message: "The AI returned an empty answer." });
           if (out.finish === "length") res.write("\u0000ERR" + JSON.stringify({ code: "truncated", message: "The answer was cut off." }));
+          else if (out.finish === "cut") res.write("\u0000ERR" + JSON.stringify({ code: "cut", message: `The AI stopped partway through (${out.reason}). Try again.` }));
           return res.end();
         } catch (e) {
           if (ctl.signal.aborted) return res.end();

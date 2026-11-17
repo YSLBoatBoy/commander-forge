@@ -410,10 +410,19 @@ function renderCommander(){
 }
 function renderPlans(){
   const el=$("plans");
-  if(!S.gameplans.length){ el.innerHTML=`<div class="empty">${S.mode==="import"?"Import a deck to see the popular directions for its commander.":"Analyze a commander to see the ways people build it."}</div>`; $("custom").value=S.custom||""; return; }
+  const mine0=S.commanders.length&&PLANS.for===S.commanders.map(c=>c.name).join("+");
+  if(!S.gameplans.length){
+    $("custom").value=S.custom||"";
+    if(mine0&&PLANS.busy){ el.innerHTML=`<div class="row" style="grid-column:1/-1"><span class="progress"><span class="dot"></span> Writing a quick read on each gameplan… this can take up to a minute.</span></div>`; return; }
+    if(mine0&&PLANS.err&&sample&&!running.length){ el.innerHTML=`<div class="warnbox" style="grid-column:1/-1">${esc(PLANS.err)}</div><div class="row" style="grid-column:1/-1"><button type="button" class="btn small" id="redesc">Try again</button></div>`; return; }
+    el.innerHTML=`<div class="empty">${S.mode==="import"?"Import a deck to see the popular directions for its commander.":"Analyze a commander to see the ways people build it."}</div>`; return;
+  }
   el.innerHTML = S.gameplans.map(p=>`<button type="button" class="plan" data-id="${esc(p.id)}" aria-pressed="${S.chosen.includes(p.id)}"><b>${esc(p.name)}</b>${p.decks?`<span class="decks">${p.decks.toLocaleString()} decks on EDHREC</span>`:""}${p.fit?`<span class="chips"><span class="chip fit ${esc(p.fit)}">${p.fit==="strong"?"Your deck already does this":p.fit==="some"?"Your deck partly does this":"Would mean bigger changes"}</span></span>${p.fitNote?`<span class="keys">${esc(p.fitNote)}</span>`:""}`:""}${!p.pitch&&!p.fit&&S.mode==="import"&&!sample?'<span class="keys">Descriptions need Claude.</span>':""}<span class="small">${p.pitch?esc(p.pitch):(running.length||$("importBtn").disabled?'<span class="muted">Writing a description…</span>':"")}</span>${p.mechanics&&p.mechanics.length?`<span class="chips">${p.mechanics.map(m=>`<span class="chip">${esc(m)}</span>`).join("")}</span>`:""}${p.keyCards&&p.keyCards.length?`<span class="keys">Key cards: ${p.keyCards.map(esc).join(", ")}</span>`:""}</button>`).join("");
   $("custom").value=S.custom||"";
+  const mine=PLANS.for===S.commanders.map(c=>c.name).join("+");
+  if(PLANS.busy&&mine){ el.insertAdjacentHTML("beforeend",`<div class="row" style="grid-column:1/-1"><span class="progress"><span class="dot"></span> Writing a quick read on each gameplan… this can take up to a minute.</span></div>`); return; }
   if(S.gameplans.length && !S.gameplans.some(g=>g.pitch) && sample && !running.length){
+    if(PLANS.err&&mine) el.insertAdjacentHTML("beforeend",`<div class="warnbox" style="grid-column:1/-1">${esc(PLANS.err)}</div>`);
     el.insertAdjacentHTML("beforeend",`<div class="row" style="grid-column:1/-1"><button type="button" class="btn small" id="redesc">Write descriptions</button><span class="note">${S.plansFailed?"The last attempt didn't come back with descriptions.":"Get a short description of each gameplan."}</span></div>`);
   }
 }
@@ -879,8 +888,16 @@ async function loadEdhForCommander(statusEl){
   const j=await liveTry(()=>edhrecPage(cmdrSlug()), statusEl);
   if(j){ S.edh=digestEdh(j); S.edh.slug=cmdrSlug(); S.edh.base=true; } else S.edh=null;
 }
+// Progress and errors for gameplan descriptions also show right under the Gameplan cards.
+const PLANS={busy:false,err:"",for:""};
 async function describePlans(signal, st){
   if(!sample||!S.commanders.length) return;
+  PLANS.busy=true; PLANS.err=""; PLANS.for=S.commanders.map(c=>c.name).join("+"); renderPlans();
+  try{ await describePlansNow(signal, st); }
+  catch(e){ if(!(e&&e.code==="cancelled")) PLANS.err=errMsg(e); throw e; }
+  finally{ PLANS.busy=false; renderPlans(); }
+}
+async function describePlansNow(signal, st){
   if(st) statusLine(st,"Writing a quick read on each gameplan…");
   const imp = S.mode==="import" && S.cards.some(c=>c.o==="deck");
   const deck = imp ? S.cards.filter(c=>c.sel).map(c=>c.n).join("; ") : "";
