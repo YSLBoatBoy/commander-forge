@@ -149,7 +149,7 @@ test("a useless AI answer is reported instead of failing silently", async () => 
   assert.equal(T.S.plansFailed, true);
 });
 
-test("every visit starts with an empty deck; save keeps it, discard clears it", () => {
+test("every visit starts with an empty deck; save keeps it, discard clears it", async () => {
   const first = loadPage({ storage: { "cforge.current": JSON.stringify({ cards: [{ n: "Old card" }], commanders: [{ name: "Old" }] }) } });
   assert.equal(first.T.S.cards.length, 0);
   assert.equal(first.T.S.commanders.length, 0);
@@ -162,7 +162,7 @@ test("every visit starts with an empty deck; save keeps it, discard clears it", 
   T.save();
   assert.equal(T.DIRTY, true);
   els.deckName.value = "My Yennett";
-  T.saveDeck();
+  await T.saveDeck();
   assert.equal(T.DIRTY, false);
   assert.ok(JSON.parse(store["cforge.builds"])["My Yennett"].state.cards.length > 50);
   T.save();
@@ -402,14 +402,14 @@ test("saving a deck opened from My collection updates that deck", async () => {
   await T.openDeckInBuilder("Talrand Spells");
   assert.equal(T.S.fromDeck, "Talrand Spells");
   // unchanged save keeps the same list
-  T.saveDeck();
+  await T.saveDeck();
   const list = () => Object.fromEntries([...T.COLL.values()].filter((v) => v.loc === "Talrand Spells").map((v) => [v.n, v.q]));
   assert.equal(list()["Island"], 30);
   assert.equal(list()["Opt"], 1);
   // cut one card, add one, save
   T.S.cards.find((c) => c.n === "Opt").sel = false;
   T.S.cards.push({ id: "x1", n: "Mystic Sanctuary", c: "land", sel: true, f: [] });
-  T.save(); T.saveDeck();
+  T.save(); await T.saveDeck();
   const after = list();
   assert.equal(after["Opt"], undefined, "cut card removed from the collection deck");
   assert.equal(after["Mystic Sanctuary"], 1, "added card is in the collection deck");

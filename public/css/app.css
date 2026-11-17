@@ -439,3 +439,6 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .ask-ch.done{opacity:.65;border-style:solid}
 .ask-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:4px 24px}
 .ask-cols .dd-swaps li{padding:4px 0}
+
+.savecoll{display:flex;gap:6px;align-items:center;margin-top:8px}
+.savecoll[hidden]{display:none}

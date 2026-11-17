@@ -570,8 +570,12 @@ function renderExport(){
 }
 function buildsAll(){ if(SERVER&&BUILDS) return BUILDS; try{ return JSON.parse(localStorage.getItem("cforge.builds")||"{}"); }catch(e){ return {}; } }
 function buildsPut(k,v){
-  if(SERVER){ BUILDS=BUILDS||{}; BUILDS[k]=v; fetch("api/builds/"+encodeURIComponent(k),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:v.state,count:v.count})}).catch(()=>{}); return; }
-  const all=buildsAll(); all[k]=v; try{ localStorage.setItem("cforge.builds",JSON.stringify(all)); }catch(e){}
+  // Resolves when stored; rejects with a readable message when it wasn't.
+  if(SERVER){ BUILDS=BUILDS||{}; BUILDS[k]=v;
+    return fetch("api/builds/"+encodeURIComponent(k),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:v.state,count:v.count})})
+      .then(async r=>{ if(!r.ok){ let m=""; try{ m=(await r.json()).message||""; }catch(e){} throw {message:`Your server didn't save it (${r.status}${m?": "+m:""}).`}; } },e=>{ if(e&&e.message&&/server didn't/.test(e.message)) throw e; throw {message:"Couldn't reach your Commander Forge server, so it wasn't saved there."}; }); }
+  const all=buildsAll(); all[k]=v; try{ localStorage.setItem("cforge.builds",JSON.stringify(all)); }catch(e){ return Promise.reject({message:"Your browser's storage is full, so it wasn't saved."}); }
+  return Promise.resolve();
 }
 function buildsDel(k){
   if(SERVER){ if(BUILDS) delete BUILDS[k]; fetch("api/builds/"+encodeURIComponent(k),{method:"DELETE"}).catch(()=>{}); return; }
@@ -596,7 +600,7 @@ function save(){
   if(S.commanders.length || S.cards.length) DIRTY=true;
   renderSaveBar();
 }
-function defaultDeckName(){ return S.savedName || (S.commanders.length ? S.commanders.map(c=>c.name.split(",")[0]).join(" + ")+(S.mode==="import"?" (imported)":"") : ""); }
+function defaultDeckName(){ return S.savedName || (S.commanders.length ? S.commanders.map(c=>String(c&&c.name||"").split(",")[0]).filter(Boolean).join(" + ")+(S.mode==="import"?" (imported)":"") : ""); }
 function renderSaveBar(){
   const has = !S.example && (S.commanders.length || S.cards.length);
   if($("saveSec")) $("saveSec").hidden = !has;
@@ -606,6 +610,7 @@ function renderSaveBar(){
   if(document.activeElement!==inp && (!inp.value || inp.dataset.auto===inp.value)){ inp.value=defaultDeckName(); inp.dataset.auto=inp.value; }
   const name=$("deckName").value.trim(); const exists=!!buildsAll()[name];
   const linked=linkedDeck();
+  if($("saveCollWrap")) $("saveCollWrap").hidden=!!linked;
   $("saveDeck").textContent = linked ? `Update “${linked}” in My collection` : exists ? (name===S.savedName?"Update saved deck":"Replace saved deck") : "Save deck";
   $("saveHint").textContent = DIRTY ? (S.savedName?`Changes since you last saved “${S.savedName}” are lost when you leave unless you save them.`:"This deck clears when you leave the site unless you save it.") : (S.savedName?`Saved as “${S.savedName}”. No unsaved changes.`:"This deck clears when you leave the site unless you save it.");
 }
@@ -629,22 +634,41 @@ function writeBackDeck(loc,newName){
   renderCollection();
   return added||removed ? `${added?"+"+added:""}${added&&removed?" / ":""}${removed?"−"+removed:""} card${added+removed===1?"":"s"}` : "no card changes";
 }
-function saveDeck(){
-  const name=($("deckName").value||"").trim()||defaultDeckName()||"Untitled deck";
-  const b=$("saveDeck"); const linked=linkedDeck();
-  if(!linked && buildsAll()[name] && name!==S.savedName && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to replace “${name}”`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; renderSaveBar(); } },4000); return; }
-  b.dataset.confirm="";
-  S.savedName=name; $("deckName").value=name;
-  let changes="";
-  if(linked){ changes=writeBackDeck(linked,name); }
-  buildsPut(name,{t:Date.now(),count:deckCount()+"/"+mainSize(),state:JSON.parse(JSON.stringify(S))});
-  DIRTY=false; renderSaved(); renderSaveBar();
-  if(linked){
-    $("saveNote").textContent=`Updated “${S.fromDeck}” in My collection (${changes}). A copy is also in Saved builds.`;
-    toast(`Updated “${S.fromDeck}” in My collection (${changes}).`);
-  } else {
-    $("saveNote").textContent=`Saved. Open it any time from Saved builds${SERVER?" on any device":""}.`;
-    toast(`Saved “${name}”.`);
+async function saveDeck(){
+  const note=$("saveNote");
+  try{
+    const name=($("deckName").value||"").trim()||defaultDeckName()||"Untitled deck";
+    const b=$("saveDeck"); let linked=linkedDeck();
+    if(!linked && buildsAll()[name] && name!==S.savedName && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to replace “${name}”`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; renderSaveBar(); } },4000); return; }
+    // "Also add it to My collection": a new deck place; later saves keep it updated.
+    let added=false;
+    if(!linked && $("saveToColl").checked){
+      if(decksList().some(d=>d.name===name)){ note.innerHTML=`<span class="err">My collection already has a deck called “${esc(name)}”. Pick another name, or open that deck from My collection to update it.</span>`; return; }
+      if(!builderDeckList().length){ note.innerHTML='<span class="err">The deck is empty, so there is nothing to add to My collection yet.</span>'; return; }
+      collAddMany(builderDeckList(),"add",name); setMeta(name,{commanders:S.commanders.map(c=>c.name)}); S.fromDeck=name; linked=null; added=true; renderCollection();
+    }
+    b.dataset.confirm="";
+    S.savedName=name; $("deckName").value=name;
+    let changes="";
+    if(linked){ changes=writeBackDeck(linked,name); }
+    b.disabled=true; note.textContent="Saving…";
+    try{ await buildsPut(name,{t:Date.now(),count:deckCount()+"/"+mainSize(),state:JSON.parse(JSON.stringify(S))}); }
+    finally{ b.disabled=false; }
+    DIRTY=false; renderSaved(); renderSaveBar();
+    if(linked){
+      note.textContent=`Updated “${S.fromDeck}” in My collection (${changes}). A copy is also in Saved builds.`;
+      toast(`Updated “${S.fromDeck}” in My collection (${changes}).`);
+    } else if(added){
+      note.textContent=`Saved, and added to My collection as “${name}”. Later saves will keep that deck updated.`;
+      toast(`Saved “${name}” and added it to My collection.`);
+    } else {
+      note.textContent=`Saved. Open it any time from Saved builds (right-hand side)${SERVER?" on any device":""}.`;
+      toast(`Saved “${name}”.`);
+    }
+  }catch(e){
+    DIRTY=true; renderSaveBar();
+    note.innerHTML=`<span class="err">Not saved: ${esc((e&&e.message)||String(e))}</span>`;
+    try{ console.error("Save failed", e); }catch(x){}
   }
 }
 function newDeck(){
