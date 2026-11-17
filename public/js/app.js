@@ -2810,40 +2810,86 @@ function makePdf(pages){
   out+=`trailer\n<< /Size ${objs.length+1} /Root ${cat} 0 R >>\nstartxref\n${x}\n%%EOF`;
   return out;
 }
+// "Own ×5 · Binder ×3, Vivi Storm" — how many copies you have in total and where the others are.
+function ownNote(n,loc){
+  if(BASIC_NAMES.test(n)) return "";
+  const o=owned(n); if(!o) return "Not in your collection";
+  const others=new Map(); o.locs.forEach(l=>{ if(l.loc!==loc) others.set(l.loc,(others.get(l.loc)||0)+l.q); });
+  const where=[...others.entries()].sort((a,b)=>(a[0]?1:0)-(b[0]?1:0)||b[1]-a[1]).map(([l,q])=>(l||"Binder")+(q>1?" ×"+q:""));
+  return `Own ×${o.q}`+(where.length?" · "+where.join(", "):" · all in this deck");
+}
+// Mana cost tokens for the PDF: [{fill:[r,g,b] | [[r,g,b],[r,g,b]] (hybrid), label}], "//" between faces.
+const PIPRGB={W:[.973,.945,.8],U:[.663,.851,.957],B:[.808,.769,.753],R:[.969,.675,.565],G:[.616,.831,.686],C:[.851,.831,.812],N:[.851,.831,.812]};
+function pdfPips(cost){
+  const out=[];
+  String(cost||"").split(/\s*\/\/\s*/).forEach((face,fi)=>{
+    if(fi) out.push({sep:true});
+    (face.match(/\{[^}]+\}/g)||[]).forEach(t=>{
+      const s=t.slice(1,-1).toUpperCase(), parts=s.split("/");
+      if(parts.length===2&&parts[1]==="P") out.push({fill:PIPRGB[parts[0]]||PIPRGB.N,label:"P"});
+      else if(parts.length>=2) out.push({fill:[PIPRGB[parts[0]]||PIPRGB.N,PIPRGB[parts[1]]||PIPRGB.N],label:/^\d$/.test(parts[0])?parts[0]:""});
+      else if(PIPRGB[s]&&s!=="N") out.push({fill:PIPRGB[s],label:s==="C"?"C":s});
+      else out.push({fill:PIPRGB.N,label:s});
+    });
+  });
+  return out;
+}
 function deckPdf(loc){
   const groups=deckPrintGroups(loc), b=deckBracket(loc), total=deckCopies(loc);
-  const W=612, H=792, M=40, cols=3, gap=14, colW=(W-2*M-gap*(cols-1))/cols, lead=10.6, fs=8.2;
+  const W=612, H=792, M=36, cols=2, gap=18, colW=(W-2*M-gap*(cols-1))/cols;
+  // Tighten line spacing (down to a floor) when the deck is just over one page, so a normal 100-card deck fits on one sheet.
+  const rows=groups.reduce((a,g)=>a+g.cards.length+1.85,0), room=cols*((H-M-64)-(M+10));
+  const lead=Math.max(9.6,Math.min(12.4,room*0.93/rows)), fs=Math.min(8.6,lead*0.7), R=Math.min(4.1,lead*0.33);
   const fit=(t,w,size)=>{ size=size||fs; if(helvW(t,size)<=w) return t; while(t.length>1&&helvW(t+"…",size)>w) t=t.slice(0,-1); return t.trimEnd()+"…"; };
   const pages=[]; let ops=[], col=0, y=0, top=0;
-  const txt=(x,yy,t,bold,size)=>ops.push(`BT /${bold?"F2":"F1"} ${size||fs} Tf ${x.toFixed(1)} ${yy.toFixed(1)} Td ${pdfStr(t)} Tj ET`);
+  const txt=(x,yy,t,bold,size,gray)=>ops.push(`${gray?gray+" g ":""}BT /${bold?"F2":"F1"} ${size||fs} Tf ${x.toFixed(1)} ${yy.toFixed(1)} Td ${pdfStr(t)} Tj ET${gray?" 0 g":""}`);
+  const K=0.5523;
+  const circ=(cx,cy,r)=>`${(cx+r).toFixed(2)} ${cy.toFixed(2)} m ${(cx+r).toFixed(2)} ${(cy+r*K).toFixed(2)} ${(cx+r*K).toFixed(2)} ${(cy+r).toFixed(2)} ${cx.toFixed(2)} ${(cy+r).toFixed(2)} c ${(cx-r*K).toFixed(2)} ${(cy+r).toFixed(2)} ${(cx-r).toFixed(2)} ${(cy+r*K).toFixed(2)} ${(cx-r).toFixed(2)} ${cy.toFixed(2)} c ${(cx-r).toFixed(2)} ${(cy-r*K).toFixed(2)} ${(cx-r*K).toFixed(2)} ${(cy-r).toFixed(2)} ${cx.toFixed(2)} ${(cy-r).toFixed(2)} c ${(cx+r*K).toFixed(2)} ${(cy-r).toFixed(2)} ${(cx+r).toFixed(2)} ${(cy-r*K).toFixed(2)} ${(cx+r).toFixed(2)} ${cy.toFixed(2)} c`;
+  const half=(cx,cy,r,left)=>{ const s=left?-1:1; return `${cx.toFixed(2)} ${(cy+r).toFixed(2)} m ${(cx+s*r*K).toFixed(2)} ${(cy+r).toFixed(2)} ${(cx+s*r).toFixed(2)} ${(cy+r*K).toFixed(2)} ${(cx+s*r).toFixed(2)} ${cy.toFixed(2)} c ${(cx+s*r).toFixed(2)} ${(cy-r*K).toFixed(2)} ${(cx+s*r*K).toFixed(2)} ${(cy-r).toFixed(2)} ${cx.toFixed(2)} ${(cy-r).toFixed(2)} c h`; };
+  const rgb=c=>c.map(v=>v.toFixed(3)).join(" ");
+  const pipsW=list=>list.reduce((a,p)=>a+(p.sep?9:R*2+1.4),0);
+  // draws right-aligned at xr; y is the text baseline
+  const drawPips=(list,xr,yy)=>{ let x=xr-pipsW(list); const cy=yy+2.9;
+    list.forEach(p=>{ if(p.sep){ txt(x+2,yy,"//",false,7,"0.5"); x+=9; return; }
+      const cx=x+R;
+      if(Array.isArray(p.fill[0])){ ops.push(`${rgb(p.fill[0])} rg ${half(cx,cy,R,true)} f ${rgb(p.fill[1])} rg ${half(cx,cy,R,false)} f`); }
+      else ops.push(`${rgb(p.fill)} rg ${circ(cx,cy,R)} f`);
+      ops.push(`0.35 G 0.35 w ${circ(cx,cy,R)} S 0 G 0 g`);
+      if(p.label){ const fsz=p.label.length>1?4.6:5.6; ops.push(`0.11 0.086 0.067 rg`); txt(cx-helvW(p.label,fsz)*0.55,cy-fsz*0.36,p.label,true,fsz); ops.push("0 g"); }
+      x+=R*2+1.4; }); };
   const newPage=first=>{
     if(ops.length) pages.push(ops.join("\n")); ops=[]; col=0;
     if(first){
       txt(M,H-M-14,loc,true,18);
       const cmd=deckCommanders(loc).join(" + ");
       txt(M,H-M-30,`${cmd?"Commander: "+cmd+"   ·   ":""}${total} cards   ·   Bracket ${b.level} (${b.name})${b.gc.length?"   ·   Game Changers: "+b.gc.length:""}`,false,9);
-      ops.push(`0.75 G 0.6 w ${M} ${H-M-38} m ${W-M} ${H-M-38} l S 0 G`);
-      top=H-M-54;
+      txt(M,H-M-42,`"Own ×N" counts every copy in your collection; after it is where the other copies are (Binder = general collection).`,false,7,"0.4");
+      ops.push(`0.75 G 0.6 w ${M} ${H-M-48} m ${W-M} ${H-M-48} l S 0 G`);
+      top=H-M-64;
     } else { txt(M,H-M-10,loc+" (continued)",true,10); top=H-M-26; }
     y=top;
-    txt(M,22,`Commander Forge · printed ${new Date().toLocaleDateString()}`,false,7);
-    txt(W-M-40,22,`Page ${pages.length+1}`,false,7);
+    txt(M,20,`Commander Forge · printed ${new Date().toLocaleDateString()}`,false,7,"0.4");
+    txt(W-M-30,20,`Page ${pages.length+1}`,false,7,"0.4");
   };
-  const header=(name)=>{ const x=M+col*(colW+gap); ops.push(`0.93 g ${x.toFixed(1)} ${(y-3).toFixed(1)} ${colW.toFixed(1)} ${(lead+3).toFixed(1)} re f 0 g`); txt(x+3,y,name,true,9); y-=lead*1.45; };
-  const need=(h,cont)=>{ if(y-h<M){ col++; y=top; if(col>=cols){ newPage(false); } if(cont) header(cont); } };
+  const header=(name)=>{ const x=M+col*(colW+gap); ops.push(`0.93 g ${x.toFixed(1)} ${(y-3.5).toFixed(1)} ${colW.toFixed(1)} ${(lead+2).toFixed(1)} re f 0 g`); txt(x+4,y,name,true,9.5); y-=lead*1.35; };
+  const need=(h,cont)=>{ if(y-h<M+10){ col++; y=top; if(col>=cols){ newPage(false); } if(cont) header(cont); } };
   newPage(true);
   groups.forEach(g=>{
     need(lead*2.4);
     header(`${g.name} (${g.count})`);
     g.cards.forEach(v=>{
       need(lead,`${g.name} (continued)`); const xx=M+col*(colW+gap);
-      const d=CARDDB[key(v.n)], cost=d&&d.mana&&!BASIC_NAMES.test(v.n)?d.mana.replace(/\s*\/\/\s*/g," // "):"";
-      const cfs=fs-0.6, costT=cost?fit(cost,colW*0.42,cfs):"", costW=costT?helvW(costT,cfs):0;
-      txt(xx+2,y,String(v.q)); txt(xx+14,y,fit(v.n,colW-16-costW-6));
-      if(costT) txt(xx+colW-costW,y,costT,false,cfs);
+      const d=CARDDB[key(v.n)], pl=d&&d.mana&&!BASIC_NAMES.test(v.n)?pdfPips(d.mana):[];
+      const note=ownNote(v.n,loc), nfs=6.8, noteW=Math.min(colW*0.4,note?helvW(note,nfs):0), noteT=note?fit(note,noteW,nfs):"";
+      const pw=Math.min(pipsW(pl),colW*0.3), nameX=xx+16, pipR=xx+colW-noteW-(noteW?8:0);
+      txt(xx+3,y,String(v.q),true);
+      txt(nameX,y,fit(v.n,pipR-pw-6-nameX));
+      if(pl.length) drawPips(pl,pipR,y);
+      if(noteT) txt(xx+colW-helvW(noteT,nfs),y+0.6,noteT,false,nfs,/^Not in/.test(noteT)?"0.6":"0.35");
+      ops.push(`0.9 G 0.3 w ${xx.toFixed(1)} ${(y-3.2).toFixed(1)} m ${(xx+colW).toFixed(1)} ${(y-3.2).toFixed(1)} l S 0 G`);
       y-=lead;
     });
-    y-=lead*0.6;
+    y-=lead*0.5;
   });
   pages.push(ops.join("\n"));
   return makePdf(pages);

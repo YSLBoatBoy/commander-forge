@@ -526,12 +526,14 @@ test("decklist PDF is grouped like the card type view", async () => {
   put("Approach of the Second Sun", "Sorcery", "{6}{W}", 7); put("Command Tower", "Land", "", 0);
   T.collAddMany(["Yennett, Cryptic Sovereign","Consecrated Sphinx","Enigma Sphinx","Rhystic Study","Sol Ring","Brainstorm","Lim-Dûl's Vault","Approach of the Second Sun","Command Tower"].map((n) => ({ n, q: 1 })).concat([{ n: "Island", q: 12 }]), "add", "Yennett");
   T.setMeta("Yennett", { commanders: ["Yennett, Cryptic Sovereign"] });
+  T.collAddMany([{ n: "Rhystic Study", q: 3 }], "add", ""); T.collAddMany([{ n: "Rhystic Study", q: 1 }], "add", "Vivi Storm");
   const g = T.deckPrintGroups("Yennett").map((x) => x.name + ":" + x.cards.map((v) => v.n).join("|"));
   assert.deepEqual(plain(g), ["Commander:Yennett, Cryptic Sovereign", "Creatures:Consecrated Sphinx|Enigma Sphinx", "Instants:Brainstorm|Lim-Dûl's Vault", "Sorceries:Approach of the Second Sun", "Artifacts:Sol Ring", "Enchantments:Rhystic Study", "Lands:Command Tower|Island"]);
   const pdf = T.deckPdf("Yennett");
   assert.ok(pdf.startsWith("%PDF-1.4") && pdf.endsWith("%%EOF"));
   assert.ok(/^[\x00-\x7f]*$/.test(pdf), "plain ASCII so it saves the same everywhere");
   assert.ok(pdf.includes("(Creatures \\(2\\))"));
+  assert.ok(pdf.includes("(Own \\327") && pdf.includes("Binder \\3273, Vivi Storm)"), "copies owned and where they are");
   assert.match(pdf, /Lim-D\\373l's Vault/, "accented letters are encoded for the PDF font");
   require_fs().writeFileSync(process.env.PDF_OUT || "/dev/null", pdf);
   // a full deck with long names flows across columns and pages without losing cards
