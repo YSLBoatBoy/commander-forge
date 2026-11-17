@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,loadMetaRemote,set CDB(v){cdb=v;cuid=v?'u1':null;},splitChanges,applyAskChanges,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,deckPdf,deckPrintGroups,copyText,collText,loadMetaRemote,set CDB(v){cdb=v;cuid=v?'u1':null;},splitChanges,applyAskChanges,applySwaps,get SWAPOFF(){return SWAPOFF},openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -516,3 +516,30 @@ test("decks loaded from Claude's storage can still be changed (it returns frozen
   T.DECKMETA.Yennett.asks[1].changes = null;
   T.CDB = null;
 });
+
+test("decklist PDF is grouped like the card type view", async () => {
+  const { T } = loadPage();
+  const put = (name, type, mana, mv) => T.putCard({ name, type, mana, mv, ci: [], legal: "legal" });
+  put("Yennett, Cryptic Sovereign", "Legendary Creature — Sphinx", "{2}{W}{U}{B}", 5); put("Consecrated Sphinx", "Creature — Sphinx", "{4}{U}{U}", 6);
+  put("Enigma Sphinx", "Artifact Creature — Sphinx", "{4}{W}{U}{B}", 7); put("Rhystic Study", "Enchantment", "{2}{U}", 3);
+  put("Sol Ring", "Artifact", "{1}", 1); put("Brainstorm", "Instant", "{U}", 1); put("Lim-Dûl's Vault", "Instant", "{U}{B}", 2);
+  put("Approach of the Second Sun", "Sorcery", "{6}{W}", 7); put("Command Tower", "Land", "", 0);
+  T.collAddMany(["Yennett, Cryptic Sovereign","Consecrated Sphinx","Enigma Sphinx","Rhystic Study","Sol Ring","Brainstorm","Lim-Dûl's Vault","Approach of the Second Sun","Command Tower"].map((n) => ({ n, q: 1 })).concat([{ n: "Island", q: 12 }]), "add", "Yennett");
+  T.setMeta("Yennett", { commanders: ["Yennett, Cryptic Sovereign"] });
+  const g = T.deckPrintGroups("Yennett").map((x) => x.name + ":" + x.cards.map((v) => v.n).join("|"));
+  assert.deepEqual(plain(g), ["Commander:Yennett, Cryptic Sovereign", "Creatures:Consecrated Sphinx|Enigma Sphinx", "Instants:Brainstorm|Lim-Dûl's Vault", "Sorceries:Approach of the Second Sun", "Artifacts:Sol Ring", "Enchantments:Rhystic Study", "Lands:Command Tower|Island"]);
+  const pdf = T.deckPdf("Yennett");
+  assert.ok(pdf.startsWith("%PDF-1.4") && pdf.endsWith("%%EOF"));
+  assert.ok(/^[\x00-\x7f]*$/.test(pdf), "plain ASCII so it saves the same everywhere");
+  assert.ok(pdf.includes("(Creatures \\(2\\))"));
+  assert.match(pdf, /Lim-D\\373l's Vault/, "accented letters are encoded for the PDF font");
+  require_fs().writeFileSync(process.env.PDF_OUT || "/dev/null", pdf);
+  // a full deck with long names flows across columns and pages without losing cards
+  const types = ["Creature — Sphinx", "Instant", "Sorcery", "Artifact", "Enchantment", "Land"];
+  const big = Array.from({ length: 99 }, (_, i) => { const n = `Very Long Example Card Name Number ${i}`; put(n, types[i % 6], "{" + (i % 7) + "}{U}{U}", i % 7); return { n, q: 1 }; });
+  T.collAddMany(big, "add", "Big Deck");
+  const pdf2 = T.deckPdf("Big Deck");
+  big.forEach((c) => assert.ok(pdf2.includes(c.n.slice(0, 20)), c.n));
+  require_fs().writeFileSync((process.env.PDF_OUT || "/dev/null").replace(/\.pdf$/, "-big.pdf"), pdf2);
+});
+function require_fs() { return fs; }

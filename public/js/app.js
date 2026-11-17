@@ -1502,7 +1502,11 @@ async function loadCollColors(rows){
 }
 function collRows(){ const w=$("collLoc").value||"*", place=w==="__gen"?"":w; return [...COLL.values()].filter(v=>w==="*"||(v.loc||"")===place).sort((a,b)=>(a.loc||"").localeCompare(b.loc||"")||a.n.localeCompare(b.n)); }
 function collCSV(){ const q=s=>'"'+String(s).replace(/"/g,'""')+'"'; return "Quantity,Name,Location\n"+collRows().map(v=>v.q+","+q(v.n)+","+q(v.loc||"General collection")).join("\n"); }
-function collText(){ return collRows().map(v=>v.q+" "+v.n).join("\n"); }
+function collText(){
+  const where=$("collLoc")?$("collLoc").value:"*";
+  if(where&&where!=="*"&&where!=="__gen"&&decksList().some(d=>d.name===where)) return deckPrintGroups(where).flatMap(g=>g.cards.map(v=>v.q+" "+v.n)).join("\n");
+  return collRows().map(v=>v.q+" "+v.n).join("\n");
+}
 // Where new cards go: general collection, an existing deck, or a new deck you name.
 function renderDest(){
   const sel=$("collDest"); if(!sel) return; const cur=sel.value; const decks=decksList();
@@ -1882,6 +1886,7 @@ function renderDeckDetail(){
     <div class="row">
       <button type="button" class="btn primary" data-dact="playtest">Playtest</button>
       <button type="button" class="btn" data-dact="open">Open in deck builder</button>
+      <button type="button" class="btn" data-dact="print">Print decklist (PDF)</button>
       <span class="sp" style="flex:1"></span>
       <input type="text" data-dact-name value="${esc(loc)}" aria-label="Deck name" maxlength="80" style="width:180px">
       <button type="button" class="btn small" data-dact="rename">Rename</button>
@@ -2683,7 +2688,7 @@ $("refineBtn").addEventListener("click",refine);
 $("refineOut").addEventListener("change",e=>{ if(e.target.dataset&&e.target.dataset.prop) updateRefineNet(); });
 $("refineOut").addEventListener("click",e=>{ if(e.target.id==="applyRefine") applyRefine(); if(e.target.id==="dismissRefine"){ S.refine=null; renderRefine(); save(); } });
 document.querySelectorAll("[data-fmt]").forEach(b=>b.addEventListener("click",()=>{ S.fmt=b.dataset.fmt; renderExport(); save(); }));
-$("copyBtn").addEventListener("click",()=>{ const t=exportText(); const ta=$("exportText"); navigator.clipboard.writeText(t).then(()=>toast("Copied. Paste it into the import box."),()=>{ ta.focus(); ta.select(); toast("Press Ctrl/Cmd+C to copy the selected list."); }); });
+$("copyBtn").addEventListener("click",()=>{ const t=exportText(); const ta=$("exportText"); copyText(t).then(()=>toast("Copied. Paste it into the import box."),()=>{ ta.focus(); ta.select(); toast("Press Ctrl/Cmd+C to copy the selected list."); }); });
 $("dlBtn").addEventListener("click",async()=>{ try{ await downloads.save({filename:(S.commanders[0]?S.commanders[0].name.split(",")[0]:"deck").replace(/[^\w ]+/g,"").trim()+" - "+(S.fmt==="moxfield"?"moxfield":"archidekt")+".txt",data:exportText()}); }catch(e){} });
 $("saved").addEventListener("click",async e=>{
   const l=e.target.closest("[data-load]"); if(l){ const st=await buildState(l.dataset.load); if(st){ if(DIRTY && l.dataset.confirm!=="1"){ l.dataset.confirm="1"; const t=l.textContent; l.textContent="Unsaved changes will be lost. Click again to open "+t; setTimeout(()=>{ if(l.isConnected){ l.dataset.confirm=""; l.textContent=t; } },4000); return; } S=st; S.cards.forEach(normCard); S.savedName=S.savedName||l.dataset.load; S.example=false; COMBOS=null; PT=null; HAND=null; DIRTY=false; $("deckName").value=S.savedName; $("saveNote").textContent=""; render(); renderCombos(); renderPlaytest(); renderHand(); renderSaveBar(); window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"}); toast("Opened "+l.dataset.load+"."); } else toast("Couldn't load that build."); return; }
@@ -2758,6 +2763,101 @@ async function keepCardsInClaude(list){
   const by={}; list.forEach(([k,d])=>{ if(k&&d&&d.name){ const b=bucket(k); (by[b]=by[b]||[]).push([k,d]); } });
   for(const [b,items] of Object.entries(by)){ try{ await cdb.doc(`data/users/${cuid}/cards-${b}`).set({items}); }catch(e){} }
 }
+// ---------- copying ----------
+// navigator.clipboard only exists on https pages (and not in every embedded view); the Unraid page is plain http,
+// so fall back to the older copy command, and as a last resort show the text selected for Ctrl+C.
+function copyText(t){
+  t=String(t||"");
+  const legacy=()=>{ const ta=document.createElement("textarea"); ta.value=t; ta.setAttribute("readonly",""); ta.style.cssText="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0"; document.body.appendChild(ta); ta.focus(); ta.select(); let ok=false; try{ ok=document.execCommand("copy"); }catch(e){} ta.remove(); return ok; };
+  try{ if(navigator.clipboard&&window.isSecureContext!==false) return navigator.clipboard.writeText(t).catch(()=>{ if(legacy()) return; throw new Error("copy failed"); }); }catch(e){}
+  return legacy()?Promise.resolve():Promise.reject(new Error("copy failed"));
+}
+function showCopyBox(t){
+  let box=$("copyBox");
+  if(!box){ box=document.createElement("div"); box.id="copyBox"; box.className="copybox"; box.innerHTML='<div class="copybox-in"><b>Copy this list</b><span class="small muted">Your browser blocked automatic copying here. The text is selected: press Ctrl+C (Cmd+C on a Mac).</span><textarea readonly></textarea><button type="button" class="btn small">Close</button></div>'; document.body.appendChild(box); box.querySelector("button").addEventListener("click",()=>{ box.hidden=true; }); }
+  const ta=box.querySelector("textarea"); ta.value=t; box.hidden=false; ta.focus(); ta.select();
+}
+
+// ---------- printable decklist (PDF, built here: no libraries, no outside services) ----------
+// Cards in the same order as the card type view: commander first, then by type, mana value, name.
+function deckPrintGroups(loc){
+  const cmds=new Set(deckCommanders(loc).map(key)), groups={};
+  deckEntries(loc).slice().sort((a,b)=>typeGroup(a.n,cmds)-typeGroup(b.n,cmds)||cardMv(a.n)-cardMv(b.n)||a.n.localeCompare(b.n))
+    .forEach(v=>{ const g=typeGroup(v.n,cmds); (groups[g]=groups[g]||[]).push(v); });
+  return Object.keys(groups).map(Number).sort((a,b)=>a-b).map(g=>({name:TYPE_GROUPS[g],cards:groups[g],count:groups[g].reduce((a,v)=>a+v.q,0)}));
+}
+// PDF text uses WinAnsi (Latin-1 plus curly quotes and dashes); anything else becomes "?". Output stays plain ASCII.
+function pdfStr(t){
+  const map={"‘":0x91,"’":0x92,"“":0x93,"”":0x94,"–":0x96,"—":0x97,"•":0x95,"™":0x99,"…":0x85};
+  let o=""; for(const ch of String(t)){ let c=ch.codePointAt(0); if(map[ch]) c=map[ch]; else if(c>255) c=63;
+    if(ch==="("||ch===")"||ch==="\\") o+="\\"+ch; else if(c<32||c>126) o+="\\"+c.toString(8).padStart(3,"0"); else o+=ch; }
+  return "("+o+")";
+}
+// Helvetica character widths (per 1000 em, standard AFM) for ASCII 32-126; other characters count as 556.
+const HELV=[278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+function helvW(t,size){ let w=0; for(const ch of String(t)){ const c=ch.codePointAt(0); w+=(c>=32&&c<=126)?HELV[c-32]:(ch==="…"?1000:556); } return w*size/1000; }
+function makePdf(pages){
+  // pages: array of content-stream strings. Fonts: F1 Helvetica, F2 Helvetica-Bold. US Letter.
+  const objs=[]; const add=s=>{ objs.push(s); return objs.length; };
+  const cat=add(""), pagesId=add(""), f1=add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"), f2=add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
+  const kids=pages.map(c=>{ const cs=add(`<< /Length ${c.length} >>\nstream\n${c}\nendstream`); return add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${cs} 0 R >>`); });
+  objs[cat-1]=`<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
+  objs[pagesId-1]=`<< /Type /Pages /Kids [${kids.map(k=>k+" 0 R").join(" ")}] /Count ${kids.length} >>`;
+  let out="%PDF-1.4\n", offs=[];
+  objs.forEach((o,i)=>{ offs.push(out.length); out+=`${i+1} 0 obj\n${o}\nendobj\n`; });
+  const x=out.length;
+  out+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`+offs.map(o=>String(o).padStart(10,"0")+" 00000 n \n").join("");
+  out+=`trailer\n<< /Size ${objs.length+1} /Root ${cat} 0 R >>\nstartxref\n${x}\n%%EOF`;
+  return out;
+}
+function deckPdf(loc){
+  const groups=deckPrintGroups(loc), b=deckBracket(loc), total=deckCopies(loc);
+  const W=612, H=792, M=40, cols=3, gap=14, colW=(W-2*M-gap*(cols-1))/cols, lead=10.6, fs=8.2;
+  const fit=(t,w,size)=>{ size=size||fs; if(helvW(t,size)<=w) return t; while(t.length>1&&helvW(t+"…",size)>w) t=t.slice(0,-1); return t.trimEnd()+"…"; };
+  const pages=[]; let ops=[], col=0, y=0, top=0;
+  const txt=(x,yy,t,bold,size)=>ops.push(`BT /${bold?"F2":"F1"} ${size||fs} Tf ${x.toFixed(1)} ${yy.toFixed(1)} Td ${pdfStr(t)} Tj ET`);
+  const newPage=first=>{
+    if(ops.length) pages.push(ops.join("\n")); ops=[]; col=0;
+    if(first){
+      txt(M,H-M-14,loc,true,18);
+      const cmd=deckCommanders(loc).join(" + ");
+      txt(M,H-M-30,`${cmd?"Commander: "+cmd+"   ·   ":""}${total} cards   ·   Bracket ${b.level} (${b.name})${b.gc.length?"   ·   Game Changers: "+b.gc.length:""}`,false,9);
+      ops.push(`0.75 G 0.6 w ${M} ${H-M-38} m ${W-M} ${H-M-38} l S 0 G`);
+      top=H-M-54;
+    } else { txt(M,H-M-10,loc+" (continued)",true,10); top=H-M-26; }
+    y=top;
+    txt(M,22,`Commander Forge · printed ${new Date().toLocaleDateString()}`,false,7);
+    txt(W-M-40,22,`Page ${pages.length+1}`,false,7);
+  };
+  const header=(name)=>{ const x=M+col*(colW+gap); ops.push(`0.93 g ${x.toFixed(1)} ${(y-3).toFixed(1)} ${colW.toFixed(1)} ${(lead+3).toFixed(1)} re f 0 g`); txt(x+3,y,name,true,9); y-=lead*1.45; };
+  const need=(h,cont)=>{ if(y-h<M){ col++; y=top; if(col>=cols){ newPage(false); } if(cont) header(cont); } };
+  newPage(true);
+  groups.forEach(g=>{
+    need(lead*2.4);
+    header(`${g.name} (${g.count})`);
+    g.cards.forEach(v=>{
+      need(lead,`${g.name} (continued)`); const xx=M+col*(colW+gap);
+      const d=CARDDB[key(v.n)], cost=d&&d.mana&&!BASIC_NAMES.test(v.n)?d.mana.replace(/\s*\/\/\s*/g," // "):"";
+      const cfs=fs-0.6, costT=cost?fit(cost,colW*0.42,cfs):"", costW=costT?helvW(costT,cfs):0;
+      txt(xx+2,y,String(v.q)); txt(xx+14,y,fit(v.n,colW-16-costW-6));
+      if(costT) txt(xx+colW-costW,y,costT,false,cfs);
+      y-=lead;
+    });
+    y-=lead*0.6;
+  });
+  pages.push(ops.join("\n"));
+  return makePdf(pages);
+}
+async function printDeck(loc){
+  if(!downloads){ toast("Downloads aren't available here."); return; }
+  try{
+    if(LIVE) await liveTry(()=>scryNames(deckEntries(loc).map(v=>v.n),null,true));
+    const safe=loc.replace(/[\\/:*?"<>|]+/g," ").trim()||"decklist";
+    await downloads.save({filename:`${safe} - decklist.pdf`,data:deckPdf(loc)});
+    toast("Decklist saved as a PDF.");
+  }catch(e){ if(e&&e.code==="declined") return; toast("Couldn't save the PDF: "+((e&&e.message)||e)); }
+}
+
 // ---------- collection & tabs events ----------
 function showView(v){
   const coll=v==="collection", sync=v==="sync", build=!coll&&!sync;
@@ -2808,7 +2908,7 @@ $("collTable").addEventListener("click",e=>{
   const st=e.target.closest("[data-cq]"); if(st){ const v=COLL.get(st.dataset.cq); if(v) collSet(v.n, v.q+Number(st.dataset.d), v.loc); return; }
   const rm=e.target.closest("[data-crm]"); if(rm){ const v=COLL.get(rm.dataset.crm); if(v){ const undo=collMutate(()=>{ COLL.delete(rm.dataset.crm); return [rm.dataset.crm]; },true); toast(`Removed ${v.n}.`,{label:"Undo",fn:undo}); } }
 });
-$("collCopy").addEventListener("click",()=>{ const t=collText(); navigator.clipboard.writeText(t).then(()=>toast("Collection copied as a list."),()=>toast("Copy didn't work in this view. Use Save .csv instead.")); });
+$("collCopy").addEventListener("click",()=>{ const t=collText(); const n=t?t.split("\n").length:0; copyText(t).then(()=>toast(`Copied ${n.toLocaleString()} line${n===1?"":"s"}. Paste it anywhere.`),()=>showCopyBox(t)); });
 $("collDl").addEventListener("click",async()=>{ try{ await downloads.save({filename:"my-mtg-collection.csv",data:collCSV()}); }catch(e){} });
 $("collClear").addEventListener("click",e=>{
   if(!COLL.size) return;
@@ -2819,7 +2919,7 @@ $("collClear").addEventListener("click",e=>{
 $("preferOwned").addEventListener("change",e=>{ S.preferOwned=e.target.checked; save(); });
 $("ownedFree").addEventListener("change",e=>{ S.ownedFree=e.target.checked; renderPool(); renderDeck(); save(); });
 $("ownedOnly").addEventListener("change",renderPool);
-$("shopCopy").addEventListener("click",()=>{ const t=shopList().map(c=>"1 "+c.n).join("\n"); navigator.clipboard.writeText(t).then(()=>toast("Shopping list copied."),()=>toast("Copy didn't work in this view.")); });
+$("shopCopy").addEventListener("click",()=>{ const t=shopList().map(c=>"1 "+c.n).join("\n"); copyText(t).then(()=>toast("Shopping list copied."),()=>showCopyBox(t)); });
 $("shopBought").addEventListener("click",()=>{ const list=shopList().map(c=>({n:c.n,q:1})); if(!list.length) return; const loc=defaultDeckName()||""; const undo=collAddMany(list,"add",loc); toast(`Added ${cardCount(list)} to ${locLabel(loc)}.`,{label:"Undo",fn:undo}); });
 $("importOwnBtn").addEventListener("click",()=>{ const list=S.cards.filter(c=>c.o==="deck").map(c=>({n:c.n,q:1})); S.commanders.forEach(c=>list.push({n:c.name,q:1})); basicsList().forEach(([b,k])=>list.push({n:b,q:k})); const loc=(defaultDeckName()||"Imported deck").replace(/ \(imported\)$/,""); const all=aggregate(list); const undo=collAddMany(all,"replace",loc); toast(`Saved ${cardCount(all)} as deck “${loc}” in your collection.`,{label:"Undo",fn:undo}); });
 $("collDest").addEventListener("change",()=>{ $("collDestName").hidden=$("collDest").value!=="__new"; if(!$("collDestName").hidden) $("collDestName").focus(); if(pendingUpload) $("upPreview").querySelector&&($("upPreview").querySelector("#upAdd")||{}).textContent!==undefined&&($("upPreview").querySelector("#upAdd").textContent="Add to "+destName()); });
@@ -2854,6 +2954,7 @@ $("deckDetail").addEventListener("click",e=>{
   if(act==="desc") return describeDeck(loc);
   if(act==="sugg") return suggestDeck(loc);
   if(act==="applysw") return applySwaps(loc);
+  if(act==="print") return printDeck(loc);
   if(act==="ask"){ const t=$("deckDetail").querySelector("[data-ask-in]"); return askDeck(loc,t&&t.value); }
   if(act==="askclear"){ setMeta(loc,{asks:[]}); renderDecks(); return; }
   if(act==="rename"){ const inp=$("deckDetail").querySelector("[data-dact-name]"); const to=(inp&&inp.value||"").trim(); if(!to||to===loc) return; if(decksList().some(d=>d.name===to)){ toast(`There's already a deck called “${to}”. Pick another name.`); return; } const undo=renameDeck(loc,to); renderCollection(); toast(`Renamed to “${to}”.`,{label:"Undo",fn:()=>{ undo(); if(DECKMETA[to]){ DECKMETA[loc]=DECKMETA[to]; delete DECKMETA[to]; persistMeta(); } OPENDECK=loc; renderCollection(); }}); return; }
@@ -2923,7 +3024,7 @@ if (window.claude && window.claude.use){
   fetch("api/health").then(r=>r.ok?r.json():null).then(async h=>{
     if(!h||h.mode!=="server"){ setSync("local"); return; }
     SERVER=true; LIVE=true;
-    downloads={ save: async ({filename,data})=>{ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type:"text/plain"})); a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000); } };
+    downloads={ save: async ({filename,data})=>{ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([data],{type:/\.pdf$/i.test(filename)?"application/pdf":/\.json$/i.test(filename)?"application/json":/\.csv$/i.test(filename)?"text/csv":"text/plain"})); a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000); } };
     $("dlBtn").hidden=false; $("collDl").hidden=false;
     await refreshServerAi();
     try{ const b=await fetch("api/builds").then(r=>r.json()); BUILDS={}; (b.builds||[]).forEach(x=>{ BUILDS[x.name]={t:x.t,count:x.count}; }); }catch(e){}

@@ -452,3 +452,9 @@ aside{position:sticky;top:calc(12px + env(safe-area-inset-top,0px));display:grid
 .syncprev{border:1px dashed color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:var(--r);padding:10px 14px}
 .syncprev p{margin:0 0 6px}
 .okbox{background:color-mix(in srgb,var(--ok) 14%,transparent);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);border-radius:var(--r);padding:10px 14px}
+
+.copybox{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.45);display:grid;place-items:center;padding:16px}
+.copybox[hidden]{display:none}
+.copybox-in{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:grid;gap:8px;width:min(560px,100%)}
+.copybox-in textarea{min-height:220px;font:inherit;font-size:.85rem}
+.copybox-in .btn{justify-self:end}
