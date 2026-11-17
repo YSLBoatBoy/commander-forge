@@ -596,19 +596,47 @@ function renderSaveBar(){
   const inp=$("deckName");
   if(document.activeElement!==inp && (!inp.value || inp.dataset.auto===inp.value)){ inp.value=defaultDeckName(); inp.dataset.auto=inp.value; }
   const name=$("deckName").value.trim(); const exists=!!buildsAll()[name];
-  $("saveDeck").textContent = exists ? (name===S.savedName?"Update saved deck":"Replace saved deck") : "Save deck";
+  const linked=linkedDeck();
+  $("saveDeck").textContent = linked ? `Update “${linked}” in My collection` : exists ? (name===S.savedName?"Update saved deck":"Replace saved deck") : "Save deck";
   $("saveHint").textContent = DIRTY ? (S.savedName?`Changes since you last saved “${S.savedName}” are lost when you leave unless you save them.`:"This deck clears when you leave the site unless you save it.") : (S.savedName?`Saved as “${S.savedName}”. No unsaved changes.`:"This deck clears when you leave the site unless you save it.");
+}
+// The collection deck this build was opened from (My collection → Your decks → Open in deck builder), if it still exists.
+function linkedDeck(){ return S.fromDeck && decksList().some(d=>d.name===S.fromDeck) ? S.fromDeck : null; }
+// The builder's deck as {n,q}: commanders, chosen cards and basics.
+function builderDeckList(){
+  const m=new Map(); const add=(n,q)=>{ const k=key(n); const cur=m.get(k); if(cur) cur.q+=q; else m.set(k,{n,q}); };
+  S.commanders.forEach(c=>add(c.name,1)); S.cards.filter(c=>c.sel).forEach(c=>add(c.n,Number(c.q)||1)); basicsList().forEach(([b,k])=>add(b,k));
+  return [...m.values()];
+}
+// Write the build back into its collection deck; returns "+3 / −2 cards" style summary.
+function writeBackDeck(loc,newName){
+  const list=builderDeckList(), before=new Map(deckEntries(loc).map(v=>[key(v.n),v.q])), after=new Map(list.map(v=>[key(v.n),v.q]));
+  let added=0, removed=0; after.forEach((q,k)=>{ const b=before.get(k)||0; if(q>b) added+=q-b; }); before.forEach((q,k)=>{ const a=after.get(k)||0; if(q>a) removed+=q-a; });
+  const keepT=new Map(deckEntries(loc).map(v=>[key(v.n),v.t]));
+  collAddMany(list,"replace",loc);
+  deckEntries(loc).forEach(v=>{ const t=keepT.get(key(v.n)); if(t) v.t=t; });
+  setMeta(loc,{commanders:S.commanders.map(c=>c.name)});
+  if(newName&&newName!==loc&&!decksList().some(d=>d.name===newName)){ moveLocation(loc,newName); DECKMETA[newName]=DECKMETA[loc]; delete DECKMETA[loc]; persistMeta(); S.fromDeck=newName; if(OPENDECK===loc) OPENDECK=newName; }
+  renderCollection();
+  return added||removed ? `${added?"+"+added:""}${added&&removed?" / ":""}${removed?"−"+removed:""} card${added+removed===1?"":"s"}` : "no card changes";
 }
 function saveDeck(){
   const name=($("deckName").value||"").trim()||defaultDeckName()||"Untitled deck";
-  const b=$("saveDeck");
-  if(buildsAll()[name] && name!==S.savedName && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to replace “${name}”`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; renderSaveBar(); } },4000); return; }
+  const b=$("saveDeck"); const linked=linkedDeck();
+  if(!linked && buildsAll()[name] && name!==S.savedName && b.dataset.confirm!=="1"){ b.dataset.confirm="1"; b.textContent=`Click again to replace “${name}”`; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; renderSaveBar(); } },4000); return; }
   b.dataset.confirm="";
   S.savedName=name; $("deckName").value=name;
+  let changes="";
+  if(linked){ changes=writeBackDeck(linked,name); }
   buildsPut(name,{t:Date.now(),count:deckCount()+"/"+mainSize(),state:JSON.parse(JSON.stringify(S))});
   DIRTY=false; renderSaved(); renderSaveBar();
-  $("saveNote").textContent=`Saved. Open it any time from Saved builds${SERVER?" on any device":""}.`;
-  toast(`Saved “${name}”.`);
+  if(linked){
+    $("saveNote").textContent=`Updated “${S.fromDeck}” in My collection (${changes}). A copy is also in Saved builds.`;
+    toast(`Updated “${S.fromDeck}” in My collection (${changes}).`);
+  } else {
+    $("saveNote").textContent=`Saved. Open it any time from Saved builds${SERVER?" on any device":""}.`;
+    toast(`Saved “${name}”.`);
+  }
 }
 function newDeck(){
   const keep={bracket:S.bracket,budget:S.mode==="import"?500:S.budget,fmt:S.fmt};
@@ -1661,7 +1689,7 @@ async function openDeckInBuilder(loc, playtest){
   if(DIRTY && !confirmLeaveBuild()) return;
   S.mode="import"; S.importText=text; showView("builder"); render(); $("importText").value=text;
   await importDeck();
-  S.savedName=loc; $("deckName").value=loc; DIRTY=false; renderSaveBar();
+  S.savedName=loc; S.fromDeck=loc; $("deckName").value=loc; DIRTY=false; renderSaveBar();
   if(playtest){ $("testSec").hidden=false; $("testSec").scrollIntoView({behavior:"smooth",block:"start"}); setTimeout(runPlaytest,60); }
   else window.scrollTo&&window.scrollTo({top:0,behavior:"smooth"});
 }

@@ -12,7 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadPage({ storage = {} } = {}) {
   let src = fs.readFileSync(path.join(root, "public/js/app.js"), "utf8");
-  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
+  const hook = "globalThis.__T={get S(){return S},parseList,rowsToCards,parsePasted,collAddMany,owned,COLL,spent,exportText,deckCount,mainSize,runPlaytest,get PT(){return PT},applyPlaytest,preconsFor,preconText,get PRE(){return PRE},acMatch,parseLoose,pipCount,blockReason,fitBudget,enforceBracket,get CMDS(){return CMDS},describePlans,readPlansAnswer,setSample:(f)=>{sample=f;},loadExample,saveDeck,discardDeck,clearCollection,collSet,deleteLocation,moveLocation,decksList,ownedWhere,uniqueCards,commanderCandidates,deckCommanders,deckColors,deckSig,setMeta,describeDeck,suggestDeck,renameDeck,get DECKMETA(){return DECKMETA},ownedCandidates,checkOwned,useOwned,spinDeck,refine,openDeckInBuilder,deckBracket,typeGroup,askDeck,preconMatches,preconDiff,deckPrecon,get PREDATA(){return PRE},rulesBracket,ownedCommanders,ownedPoolFor,colorGroup,get SPIN(){return SPIN},setLive:(v)=>{LIVE=v;},putCard:(d)=>{CARDDB[key(d.name)]=d;},get DECKERR(){return DECKERR},save,buildsAll,get DIRTY(){return DIRTY}};\n";
   src = src.replace("// ================= boot =================", hook + "// ================= boot =================");
   const data = {
     cmdData: fs.readFileSync(path.join(root, "public/data/commanders.json"), "utf8"),
@@ -391,4 +391,29 @@ test("deck bracket follows the official rules", async () => {
   assert.equal(T.deckBracket("Casual").level, 3);
   T.setMeta("Two GC", { desc: { bracket: 4, summary: "x" }, descSig: T.deckSig("Two GC") });
   assert.equal(T.deckBracket("Two GC").level, 4, "AI estimate can raise it");
+});
+
+test("saving a deck opened from My collection updates that deck", async () => {
+  const { T } = loadPage();
+  await new Promise((r) => setImmediate(r));
+  const cards = ["Sol Ring", "Arcane Signet", "Counterspell", "Opt", "Brainstorm", "Ponder", "Preordain", "Swan Song"];
+  T.collAddMany([{ n: "Talrand, Sky Summoner", q: 1 }, { n: "Island", q: 30 }].concat(cards.map((n) => ({ n, q: 1 }))), "add", "Talrand Spells");
+  T.setMeta("Talrand Spells", { commanders: ["Talrand, Sky Summoner"] });
+  await T.openDeckInBuilder("Talrand Spells");
+  assert.equal(T.S.fromDeck, "Talrand Spells");
+  // unchanged save keeps the same list
+  T.saveDeck();
+  const list = () => Object.fromEntries([...T.COLL.values()].filter((v) => v.loc === "Talrand Spells").map((v) => [v.n, v.q]));
+  assert.equal(list()["Island"], 30);
+  assert.equal(list()["Opt"], 1);
+  // cut one card, add one, save
+  T.S.cards.find((c) => c.n === "Opt").sel = false;
+  T.S.cards.push({ id: "x1", n: "Mystic Sanctuary", c: "land", sel: true, f: [] });
+  T.save(); T.saveDeck();
+  const after = list();
+  assert.equal(after["Opt"], undefined, "cut card removed from the collection deck");
+  assert.equal(after["Mystic Sanctuary"], 1, "added card is in the collection deck");
+  assert.equal(after["Talrand, Sky Summoner"], 1);
+  assert.equal(T.DIRTY, false);
+  assert.ok(T.buildsAll()["Talrand Spells"], "a copy is also in Saved builds");
 });
